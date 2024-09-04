@@ -71,6 +71,7 @@ class BaseBuffer(ABC):
         super().__init__()
         self.buffer_size = buffer_size
         self.observation_shape = observation_shape
+        self.obs_shape = self.observation_shape
         self.action_dim = action_shape
         self.pos = 0
         self.full = False

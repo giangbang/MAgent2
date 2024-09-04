@@ -38,6 +38,7 @@ Documentation = "https://magent2.farama.org"
 
 [tool.setuptools]
 include-package-data = true
+packages = ["magent2"]
 
 # Linters and Test tools #######################################################
 

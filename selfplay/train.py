@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import tyro
+import magent2
 from buffers import ReplayBuffer
 from torch.utils.tensorboard import SummaryWriter
 
@@ -29,7 +30,7 @@ class Args:
     """if toggled, this experiment will be tracked with Weights and Biases"""
     wandb_project_name: str = "cleanRL"
     """the wandb's project name"""
-    wandb_entity: str = None
+    wandb_entity: str = None  # type: ignore
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
@@ -55,7 +56,7 @@ class Args:
     """the discount factor gamma"""
     tau: float = 1.0
     """the target network update rate"""
-    target_network_frequency: int = 500
+    target_network_frequency: int = 100
     """the timesteps it takes to update the target network"""
     batch_size: int = 128
     """the batch size of sample from the reply memory"""
@@ -90,8 +91,18 @@ def make_env(env_id, seed, render=False):
 class QNetwork(nn.Module):
     def __init__(self, observation_shape, action_shape):
         super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv2d(observation_shape[-1], observation_shape[-1], 3),
+            nn.ReLU(),
+            nn.Conv2d(observation_shape[-1], observation_shape[-1], 3),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
+        dummy_input = torch.randn(observation_shape).permute(2, 0, 1)
+        dummy_output = self.cnn(dummy_input)
+        flatten_dim = dummy_output.shape[-1]
         self.network = nn.Sequential(
-            nn.Linear(observation_shape, 120),
+            nn.Linear(flatten_dim, 120),
             nn.ReLU(),
             nn.Linear(120, 84),
             nn.ReLU(),
@@ -99,6 +110,7 @@ class QNetwork(nn.Module):
         )
 
     def forward(self, x):
+        x = self.cnn(x)
         return self.network(x)
 
 
@@ -139,16 +151,17 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
-    envs = make_env(args.env_id, args.seed)
+    envs = make_env(args.env_id, args.seed)()
+    env_name = args.env_id.split("_")[0]
 
     from magent2.specs import specs
 
     q_networks = {
         handle: QNetwork(
-            specs[args.env_id]["observation_shape"][handle],
-            specs[args.env_id]["action_shape"][handle],
+            specs[env_name]["observation_shape"][handle],
+            specs[env_name]["action_shape"][handle],
         ).to(device)
-        for handle in specs[args.env_id]["handle_groups"]
+        for handle in specs[env_name]["handle_groups"]
     }
     optimizers = {
         handle: optim.Adam(q_network.parameters(), lr=args.learning_rate)
@@ -156,10 +169,10 @@ if __name__ == "__main__":
     }
     target_networks = {
         handle: QNetwork(
-            specs[args.env_id]["observation_shape"][handle],
-            specs[args.env_id]["action_shape"][handle],
+            specs[env_name]["observation_shape"][handle],
+            specs[env_name]["action_shape"][handle],
         ).to(device)
-        for handle in specs[args.env_id]["handle_groups"]
+        for handle in specs[env_name]["handle_groups"]
     }
     for handle, target_network in target_networks.items():
         target_network.load_state_dict(q_networks[handle].state_dict())
@@ -167,12 +180,12 @@ if __name__ == "__main__":
     rbs = {
         handle: ReplayBuffer(
             args.buffer_size,
-            specs[args.env_id]["observation_shape"],
-            specs[args.env_id]["action_shape"],
+            specs[env_name]["observation_shape"][handle],
+            1,  # discrete action
             device,
             handle_timeout_termination=False,
         )
-        for handle in specs[args.env_id]["handle_groups"]
+        for handle in specs[env_name]["handle_groups"]
     }  # each handle group corresponds to a seperate replay buffer, they share experience within each group
     rewards_count = {}
     current_eps_len = 0
@@ -195,14 +208,15 @@ if __name__ == "__main__":
             obs, _, _, _, _ = envs.last()
             if random.random() < epsilon:
                 actions = np.random.randint(
-                    0, specs[args.env_id]["action_shape"][agent_handle], size=(1,)
+                    0, specs[env_name]["action_shape"][agent_handle], size=(1,)
                 )
             else:
-                q_values = q_networks[agent_handle](torch.Tensor(obs).to(device))
+                obs_tensor = torch.Tensor(obs).permute(2, 0, 1).to(device)
+                q_values = q_networks[agent_handle](obs_tensor)
                 actions = torch.argmax(q_values, dim=1).cpu().numpy()
 
             # TRY NOT TO MODIFY: execute the game and log data.
-            envs.step(actions)
+            envs.step(actions[0])
             next_obs, rewards, terminations, truncations, infos = envs.last()
             rewards_count[agent] = rewards + getattr(rewards_count, agent, 0)
 
@@ -210,7 +224,7 @@ if __name__ == "__main__":
 
             if truncations or terminations:
                 envs.reset()
-                r = np.sum(*rewards_count.values())
+                r = np.sum(np.array(list(rewards_count.values())))
                 writer.add_scalar(f"charts/sum_episodic_return", r, global_step)
                 writer.add_scalar(
                     "charts/episodic_length", current_eps_len, global_step
@@ -224,14 +238,14 @@ if __name__ == "__main__":
                 for handle, rb in rbs.items():
                     data = rb.sample(args.batch_size)
                     with torch.no_grad():
-                        target_max, _ = target_network(data.next_observations).max(
-                            dim=1
-                        )
+                        target_max, _ = target_networks[handle](
+                            data.next_observations.permute(0, 3, 1, 2)
+                        ).max(dim=1)
                         td_target = data.rewards.flatten() + args.gamma * target_max * (
                             1 - data.dones.flatten()
                         )
                     old_val = (
-                        q_networks[handle](data.observations)
+                        q_networks[handle](data.observations.permute(0, 3, 1, 2))
                         .gather(1, data.actions)
                         .squeeze()
                     )
@@ -242,6 +256,7 @@ if __name__ == "__main__":
                         writer.add_scalar(
                             "losses/q_values", old_val.mean().item(), global_step
                         )
+                        print("SPS:", int(global_step / (time.time() - start_time)))
                         writer.add_scalar(
                             "charts/SPS",
                             int(global_step / (time.time() - start_time)),
@@ -256,7 +271,7 @@ if __name__ == "__main__":
 
             # update target network
             if global_step % args.target_network_frequency == 0:
-                for handle in specs[args.env_id]["handle_groups"]:
+                for handle in specs[env_name]["handle_groups"]:
                     target_network, q_network = (
                         target_networks[handle],
                         q_networks[handle],
@@ -280,7 +295,7 @@ if __name__ == "__main__":
     writer.close()
 
     # visualize results
-    vis_env = make_env(args.env_id, args.seed + 1, render=True)
+    vis_env = make_env(args.env_id, args.seed + 1, render=True)()
     vis_env.reset()
     frames = vis_env.render()
 
