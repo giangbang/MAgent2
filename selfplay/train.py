@@ -44,21 +44,21 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "battle_v4"
     """the id of the environment"""
-    total_timesteps: int = 500000
+    total_timesteps: int = 5000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments, always fixed with magent"""
-    buffer_size: int = 10000
+    buffer_size: int = 1000
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
     tau: float = 1.0
     """the target network update rate"""
-    target_network_frequency: int = 100
+    target_network_frequency: int = 50
     """the timesteps it takes to update the target network"""
-    batch_size: int = 128
+    batch_size: int = 64
     """the batch size of sample from the reply memory"""
     start_e: float = 1
     """the starting epsilon for exploration"""
@@ -66,9 +66,9 @@ class Args:
     """the ending epsilon for exploration"""
     exploration_fraction: float = 0.5
     """the fraction of `total-timesteps` it takes from start-e to go end-e"""
-    learning_starts: int = 10000
+    learning_starts: int = 100
     """timestep to start learning"""
-    train_frequency: int = 10
+    train_frequency: int = 1
     """the frequency of training"""
 
 
@@ -152,7 +152,7 @@ if __name__ == "__main__":
 
     # env setup
     envs = make_env(args.env_id, args.seed)()
-    env_name = args.env_id.split("_")[0]
+    env_name = "_".join(args.env_id.split("_")[:-1])
 
     from magent2.specs import specs
 
@@ -251,23 +251,23 @@ if __name__ == "__main__":
                     )
                     loss = F.mse_loss(td_target, old_val)
 
-                    if global_step % 2000 == 0:
-                        writer.add_scalar("losses/td_loss", loss, global_step)
-                        writer.add_scalar(
-                            "losses/q_values", old_val.mean().item(), global_step
-                        )
-                        print("SPS:", int(global_step / (time.time() - start_time)))
-                        writer.add_scalar(
-                            "charts/SPS",
-                            int(global_step / (time.time() - start_time)),
-                            global_step,
-                        )
-
                     # optimize the model
                     optimizer = optimizers[handle]
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
+
+                if global_step % 20 == 0:
+                    writer.add_scalar("losses/td_loss", loss, global_step)
+                    writer.add_scalar(
+                        "losses/q_values", old_val.mean().item(), global_step
+                    )
+                    print("SPS:", int(global_step / (time.time() - start_time)))
+                    writer.add_scalar(
+                        "charts/SPS",
+                        int(global_step / (time.time() - start_time)),
+                        global_step,
+                    )
 
             # update target network
             if global_step % args.target_network_frequency == 0:
