@@ -19,3 +19,5 @@ dist/
 _build/*
 docs/environments/*.md
 !docs/environments/index.md
+
+venv

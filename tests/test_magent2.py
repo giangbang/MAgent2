@@ -23,5 +23,8 @@ def test_import_environments():
         try:
             # Dynamically import the environment module
             importlib.import_module(f"magent2.environments.{env}")
+            print("import ok")
         except ImportError:
             assert False, f"{env} should be importable"
+    
+test_import_environments()
