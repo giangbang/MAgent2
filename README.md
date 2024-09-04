@@ -15,10 +15,9 @@ Install using pip: `pip install magent2`. See [docs](https://magent2.farama.org/
 
 Build from source:
 ```
-bash build.sh
-pip install -e .
+pip install .
 ```
-
+Do not install with interactive mode, see issue [#19](https://github.com/Farama-Foundation/MAgent2/issues/19). Also, run from an interactive jupyter notebook seems to not working.
 
 ## Requirements
 MAgent2 supports Linux and macOS and Python 3.8+.

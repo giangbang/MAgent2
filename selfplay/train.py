@@ -33,7 +33,7 @@ class Args:
     """the entity (team) of wandb's project"""
     capture_video: bool = False
     """whether to capture videos of the agent performances (check out `videos` folder)"""
-    save_model: bool = False
+    save_model: bool = True
     """whether to save model into the `runs/{run_name}` folder"""
     upload_model: bool = False
     """whether to upload the saved model to huggingface"""
@@ -48,7 +48,7 @@ class Args:
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
-    """the number of parallel game environments"""
+    """the number of parallel game environments, always fixed with magent"""
     buffer_size: int = 10000
     """the replay memory buffer size"""
     gamma: float = 0.99
@@ -71,12 +71,15 @@ class Args:
     """the frequency of training"""
 
 
-def make_env(env_id, seed):
+def make_env(env_id, seed, render=False):
     def thunk():
         import importlib
 
         importlib.import_module(f"magent2.environments.{env_id}")
-        env = eval(f"magent2.environments.{env_id}").env()
+        if render:
+            env = eval(f"magent2.environments.{env_id}").env(render_mode="rgb_array")
+        else:
+            env = eval(f"magent2.environments.{env_id}").env()
 
         return env
 
@@ -105,15 +108,6 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
 
 
 if __name__ == "__main__":
-    import stable_baselines3 as sb3
-
-    if sb3.__version__ < "2.0":
-        raise ValueError(
-            """Ongoing migration: run the following command to install the new dependencies:
-
-poetry run pip install "stable_baselines3==2.0.0a1"
-"""
-        )
     args = tyro.cli(Args)
     assert args.num_envs == 1, "vectorized envs are not supported at the moment"
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
@@ -149,14 +143,26 @@ poetry run pip install "stable_baselines3==2.0.0a1"
 
     from magent2.specs import specs
 
-    q_network = QNetwork(
-        specs[args.env_id]["observation_shape"], specs[args.env_id]["action_shape"]
-    ).to(device)
-    optimizer = optim.Adam(q_network.parameters(), lr=args.learning_rate)
-    target_network = QNetwork(
-        specs[args.env_id]["observation_shape"], specs[args.env_id]["action_shape"]
-    ).to(device)
-    target_network.load_state_dict(q_network.state_dict())
+    q_networks = {
+        handle: QNetwork(
+            specs[args.env_id]["observation_shape"][handle],
+            specs[args.env_id]["action_shape"][handle],
+        ).to(device)
+        for handle in specs[args.env_id]["handle_groups"]
+    }
+    optimizers = {
+        handle: optim.Adam(q_network.parameters(), lr=args.learning_rate)
+        for handle, q_network in q_networks.items()
+    }
+    target_networks = {
+        handle: QNetwork(
+            specs[args.env_id]["observation_shape"][handle],
+            specs[args.env_id]["action_shape"][handle],
+        ).to(device)
+        for handle in specs[args.env_id]["handle_groups"]
+    }
+    for handle, target_network in target_networks.items():
+        target_network.load_state_dict(q_networks[handle].state_dict())
 
     rbs = {
         handle: ReplayBuffer(
@@ -168,6 +174,9 @@ poetry run pip install "stable_baselines3==2.0.0a1"
         )
         for handle in specs[args.env_id]["handle_groups"]
     }  # each handle group corresponds to a seperate replay buffer, they share experience within each group
+    rewards_count = {}
+    current_eps_len = 0
+
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
@@ -180,116 +189,120 @@ poetry run pip install "stable_baselines3==2.0.0a1"
             args.exploration_fraction * args.total_timesteps,
             global_step,
         )
+        current_eps_len += 1
         for agent in envs.agent_iter():
             agent_handle = agent.split("_")[0]
-            obs, rewards, terminations, truncations, infos = envs.last()
+            obs, _, _, _, _ = envs.last()
             if random.random() < epsilon:
-                actions = random.randint(
-                    0, specs[args.env_id]["action_shape"][agent_handle] - 1
+                actions = np.random.randint(
+                    0, specs[args.env_id]["action_shape"][agent_handle], size=(1,)
                 )
             else:
-                q_values = q_network(torch.Tensor(obs).to(device))
+                q_values = q_networks[agent_handle](torch.Tensor(obs).to(device))
                 actions = torch.argmax(q_values, dim=1).cpu().numpy()
 
             # TRY NOT TO MODIFY: execute the game and log data.
             envs.step(actions)
             next_obs, rewards, terminations, truncations, infos = envs.last()
+            rewards_count[agent] = rewards + getattr(rewards_count, agent, 0)
 
-        # TRY NOT TO MODIFY: record rewards for plotting purposes
-        if "final_info" in infos:
-            for info in infos["final_info"]:
-                if info and "episode" in info:
-                    print(
-                        f"global_step={global_step}, episodic_return={info['episode']['r']}"
-                    )
-                    writer.add_scalar(
-                        "charts/episodic_return", info["episode"]["r"], global_step
-                    )
-                    writer.add_scalar(
-                        "charts/episodic_length", info["episode"]["l"], global_step
-                    )
+            rbs[agent_handle].add(obs, next_obs, actions, rewards, terminations, infos)
 
-        # TRY NOT TO MODIFY: save data to reply buffer; handle `final_observation`
-        real_next_obs = next_obs.copy()
-        for idx, trunc in enumerate(truncations):
-            if trunc:
-                real_next_obs[idx] = infos["final_observation"][idx]
-        rb.add(obs, real_next_obs, actions, rewards, terminations, infos)
-
-        # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
-        obs = next_obs
+            if truncations or terminations:
+                envs.reset()
+                r = np.sum(*rewards_count.values())
+                writer.add_scalar(f"charts/sum_episodic_return", r, global_step)
+                writer.add_scalar(
+                    "charts/episodic_length", current_eps_len, global_step
+                )
+                current_eps_len = 0
+                rewards_count = {}
 
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
             if global_step % args.train_frequency == 0:
-                data = rb.sample(args.batch_size)
-                with torch.no_grad():
-                    target_max, _ = target_network(data.next_observations).max(dim=1)
-                    td_target = data.rewards.flatten() + args.gamma * target_max * (
-                        1 - data.dones.flatten()
+                for handle, rb in rbs.items():
+                    data = rb.sample(args.batch_size)
+                    with torch.no_grad():
+                        target_max, _ = target_network(data.next_observations).max(
+                            dim=1
+                        )
+                        td_target = data.rewards.flatten() + args.gamma * target_max * (
+                            1 - data.dones.flatten()
+                        )
+                    old_val = (
+                        q_networks[handle](data.observations)
+                        .gather(1, data.actions)
+                        .squeeze()
                     )
-                old_val = q_network(data.observations).gather(1, data.actions).squeeze()
-                loss = F.mse_loss(td_target, old_val)
+                    loss = F.mse_loss(td_target, old_val)
 
-                if global_step % 100 == 0:
-                    writer.add_scalar("losses/td_loss", loss, global_step)
-                    writer.add_scalar(
-                        "losses/q_values", old_val.mean().item(), global_step
-                    )
-                    print("SPS:", int(global_step / (time.time() - start_time)))
-                    writer.add_scalar(
-                        "charts/SPS",
-                        int(global_step / (time.time() - start_time)),
-                        global_step,
-                    )
+                    if global_step % 2000 == 0:
+                        writer.add_scalar("losses/td_loss", loss, global_step)
+                        writer.add_scalar(
+                            "losses/q_values", old_val.mean().item(), global_step
+                        )
+                        writer.add_scalar(
+                            "charts/SPS",
+                            int(global_step / (time.time() - start_time)),
+                            global_step,
+                        )
 
-                # optimize the model
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                    # optimize the model
+                    optimizer = optimizers[handle]
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
 
             # update target network
             if global_step % args.target_network_frequency == 0:
-                for target_network_param, q_network_param in zip(
-                    target_network.parameters(), q_network.parameters()
-                ):
-                    target_network_param.data.copy_(
-                        args.tau * q_network_param.data
-                        + (1.0 - args.tau) * target_network_param.data
+                for handle in specs[args.env_id]["handle_groups"]:
+                    target_network, q_network = (
+                        target_networks[handle],
+                        q_networks[handle],
                     )
+                    for target_network_param, q_network_param in zip(
+                        target_network.parameters(), q_network.parameters()
+                    ):
+                        target_network_param.data.copy_(
+                            args.tau * q_network_param.data
+                            + (1.0 - args.tau) * target_network_param.data
+                        )
 
     if args.save_model:
-        model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
-        torch.save(q_network.state_dict(), model_path)
+        model_path = f"runs/{run_name}/{args.exp_name}"
+        for handle, q_network in q_networks.items():
+            torch.save(q_network.state_dict(), os.path.join(model_path, handle + ".pt"))
         print(f"model saved to {model_path}")
-        from cleanrl_utils.evals.dqn_eval import evaluate
-
-        episodic_returns = evaluate(
-            model_path,
-            make_env,
-            args.env_id,
-            eval_episodes=10,
-            run_name=f"{run_name}-eval",
-            Model=QNetwork,
-            device=device,
-            epsilon=0.05,
-        )
-        for idx, episodic_return in enumerate(episodic_returns):
-            writer.add_scalar("eval/episodic_return", episodic_return, idx)
-
-        if args.upload_model:
-            from cleanrl_utils.huggingface import push_to_hub
-
-            repo_name = f"{args.env_id}-{args.exp_name}-seed{args.seed}"
-            repo_id = f"{args.hf_entity}/{repo_name}" if args.hf_entity else repo_name
-            push_to_hub(
-                args,
-                episodic_returns,
-                repo_id,
-                "DQN",
-                f"runs/{run_name}",
-                f"videos/{run_name}-eval",
-            )
 
     envs.close()
+    del envs
     writer.close()
+
+    # visualize results
+    vis_env = make_env(args.env_id, args.seed + 1, render=True)
+    vis_env.reset()
+    frames = vis_env.render()
+
+    stop = False
+    while not stop:
+        for agent in vis_env.agent_iter():
+            observation, reward, termination, truncation, info = vis_env.last()
+            agent_handle = agent_handle = agent.split("_")[0]
+
+            q_value = q_networks[agent_handle](torch.Tensor(observation).to(device))
+            action = torch.argmax(q_value, dim=1).cpu().numpy()
+            vis_env.step(action)
+            frames.append(vis_env.render())
+            if terminations or truncations:
+                stop = True
+                break
+
+    import cv2
+
+    out = cv2.VideoWriter(
+        "output.mp4", cv2.VideoWriter_fourcc(*"mp4v"), 30, frames[0].shape[:2]
+    )
+    for frame in frames:
+        out.write(frame)
+    out.release()
