@@ -21,3 +21,5 @@ docs/environments/*.md
 !docs/environments/index.md
 
 venv
+runs
+video

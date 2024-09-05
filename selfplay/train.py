@@ -13,6 +13,7 @@ import torch.optim as optim
 import tyro
 import magent2
 from buffers import ReplayBuffer
+from play import gameplay_video
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -62,7 +63,7 @@ class Args:
     """the batch size of sample from the reply memory"""
     start_e: float = 1
     """the starting epsilon for exploration"""
-    end_e: float = 0.05
+    end_e: float = 0.1
     """the ending epsilon for exploration"""
     exploration_fraction: float = 0.5
     """the fraction of `total-timesteps` it takes from start-e to go end-e"""
@@ -70,6 +71,8 @@ class Args:
     """timestep to start learning"""
     train_frequency: int = 10
     """the frequency of training"""
+    random_opponent: bool = True
+    """training against other dqn agents or random agents"""
 
 
 def make_env(env_id, seed, render=False):
@@ -157,6 +160,7 @@ if __name__ == "__main__":
 
     # env setup
     envs = make_env(args.env_id, args.seed)()
+    vis_env = make_env(args.env_id, args.seed, render=True)()
     env_name = "_".join(args.env_id.split("_")[:-1])
 
     from magent2.specs import specs
@@ -195,109 +199,121 @@ if __name__ == "__main__":
     rewards_count = {}
     current_eps_len = 0
 
+    opponent_handles = []
+    if args.random_opponent: # red is enemy, act random
+        opponent_handles = ["prey", "red", "redmelee", "redranged", "deer"]
+
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
     envs.reset(seed=args.seed)
-    for global_step, agent in enumerate(envs.agent_iter()):
-        # ALGO LOGIC: put action logic here
-        epsilon = linear_schedule(
-            args.start_e,
-            args.end_e,
-            args.exploration_fraction * args.total_timesteps,
-            global_step,
-        )
-        current_eps_len += 1
-        agent_handle = agent.split("_")[0]
-        obs, _, _, _, _ = envs.last()
-        if random.random() < epsilon:
-            actions = np.random.randint(
-                0, specs[env_name]["action_shape"][agent_handle], size=(1,)
+    global_step=0
+    while global_step < args.total_timesteps:
+        print("A new episode restarts...")
+        for agent in envs.agent_iter():
+            # ALGO LOGIC: put action logic here
+            epsilon = linear_schedule(
+                args.start_e,
+                args.end_e,
+                args.exploration_fraction * args.total_timesteps,
+                global_step,
             )
-        else:
-            obs_tensor = torch.Tensor(obs).float().permute(2, 0, 1).to(device)
-            with torch.no_grad():
-                q_values = q_networks[agent_handle](obs_tensor)
-            assert len(q_values.shape) == 2
-            actions = torch.argmax(q_values, dim=1).cpu().numpy()
-            assert np.prod(actions.shape) == 1
+            global_step += 1
+            current_eps_len += 1
+            agent_handle = agent.split("_")[0]
+            obs, _, termination, truncation, _ = envs.last()
+            if termination or truncation:
+                actions = [None]
+            elif random.random() < epsilon or (args.random_opponent and agent_handle in opponent_handles):
+                actions = np.random.randint(
+                    0, specs[env_name]["action_shape"][agent_handle], size=(1,)
+                )
+            else:
+                obs_tensor = torch.Tensor(obs).float().permute(2, 0, 1).to(device)
+                with torch.no_grad():
+                    q_values = q_networks[agent_handle](obs_tensor)
+                assert len(q_values.shape) == 2
+                actions = torch.argmax(q_values, dim=1).cpu().numpy()
+                assert np.prod(actions.shape) == 1
 
-        # TRY NOT TO MODIFY: execute the game and log data.
-        envs.step(actions[0])
-        next_obs, rewards, terminations, truncations, infos = envs.last()
-        rewards_count[agent] = rewards + getattr(rewards_count, agent, 0)
+            # TRY NOT TO MODIFY: execute the game and log data.
+            envs.step(actions[0])
 
-        rbs[agent_handle].add(obs, next_obs, actions, rewards, terminations, infos)
+            if actions[0] is not None: # this agent is alive
+                next_obs, cumrw, terminations, truncations, infos = envs.last() # reward here is cummulative reward
+                rewards = envs.rewards[agent]
+                print(cumrw)
+                rbs[agent_handle].add(obs, next_obs, actions, rewards, terminations, infos)
 
-        if truncations or terminations:
-            # a single episode can have tens of thousands of step
-            # this is expected since the default maximal env step is 1k
-            # each env step consist of all individual agent steps, making up, for example, ~ 126k steps at worst in battle_v4
-            envs.reset()
-            r = np.sum(np.array(list(rewards_count.values())))
-            writer.add_scalar(f"charts/sum_episodic_return", r, global_step)
-            writer.add_scalar("charts/episodic_length", current_eps_len, global_step)
-            current_eps_len = 0
-            rewards_count = {}
-
-        # ALGO LOGIC: training.
-        if global_step > args.learning_starts:
-            if global_step % args.train_frequency == 0:
-                for handle, rb in rbs.items():
-                    data = rb.sample(args.batch_size)
-                    with torch.no_grad():
-                        target_max, _ = target_networks[handle](
-                            data.next_observations.permute(0, 3, 1, 2)
-                        ).max(dim=1)
-                        td_target = data.rewards.flatten() + args.gamma * target_max * (
-                            1 - data.dones.flatten()
+            # ALGO LOGIC: training.
+            if global_step > args.learning_starts:
+                if global_step % args.train_frequency == 0:
+                    for handle, rb in rbs.items():
+                        data = rb.sample(args.batch_size)
+                        with torch.no_grad():
+                            target_max, _ = target_networks[handle](
+                                data.next_observations.permute(0, 3, 1, 2)
+                            ).max(dim=1)
+                            td_target = data.rewards.flatten() + args.gamma * target_max * (
+                                1 - data.dones.flatten()
+                            )
+                        old_val = (
+                            q_networks[handle](data.observations.permute(0, 3, 1, 2))
+                            .gather(1, data.actions)
+                            .squeeze()
                         )
-                    old_val = (
-                        q_networks[handle](data.observations.permute(0, 3, 1, 2))
-                        .gather(1, data.actions)
-                        .squeeze()
-                    )
-                    loss = F.mse_loss(td_target, old_val)
+                        loss = F.mse_loss(td_target, old_val)
 
-                    # optimize the model
-                    optimizer = optimizers[handle]
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
+                        # optimize the model
+                        optimizer = optimizers[handle]
+                        optimizer.zero_grad()
+                        loss.backward()
+                        optimizer.step()
 
-                if global_step % 5000 == 0:
-                    writer.add_scalar("losses/td_loss", loss, global_step)
-                    writer.add_scalar(
-                        "losses/q_values", old_val.mean().item(), global_step
-                    )
-                    print(
-                        "SPS:",
-                        int(global_step / (time.time() - start_time)),
-                        f", {global_step}/{args.total_timesteps}",
-                    )
-                    writer.add_scalar(
-                        "charts/SPS",
-                        int(global_step / (time.time() - start_time)),
-                        global_step,
-                    )
-
-            # update target network
-            if global_step % args.target_network_frequency == 0:
-                for handle in specs[env_name]["handle_groups"]:
-                    target_network, q_network = (
-                        target_networks[handle],
-                        q_networks[handle],
-                    )
-                    for target_network_param, q_network_param in zip(
-                        target_network.parameters(), q_network.parameters()
-                    ):
-                        target_network_param.data.copy_(
-                            args.tau * q_network_param.data
-                            + (1.0 - args.tau) * target_network_param.data
+                    if global_step % 20000 == 0:
+                        writer.add_scalar("losses/td_loss", loss, global_step)
+                        writer.add_scalar(
+                            "losses/q_values", old_val.mean().item(), global_step
+                        )
+                        print(
+                            "SPS:",
+                            int(global_step / (time.time() - start_time)),
+                            f", {global_step}/{args.total_timesteps}",
+                        )
+                        writer.add_scalar(
+                            "charts/SPS",
+                            int(global_step / (time.time() - start_time)),
+                            global_step,
                         )
 
-        if global_step >= args.total_timesteps:
-            break
+                # update target network
+                if global_step % args.target_network_frequency == 0:
+                    for handle in specs[env_name]["handle_groups"]:
+                        target_network, q_network = (
+                            target_networks[handle],
+                            q_networks[handle],
+                        )
+                        for target_network_param, q_network_param in zip(
+                            target_network.parameters(), q_network.parameters()
+                        ):
+                            target_network_param.data.copy_(
+                                args.tau * q_network_param.data
+                                + (1.0 - args.tau) * target_network_param.data
+                            )
+
+            if (global_step + 1) % int(1e6) == 0:
+                model_path = f"runs/{run_name}/{args.exp_name}"
+                gameplay_video(vis_env=vis_env, env_name=env_name, seed=args.seed, 
+                               q_networks=q_networks, device=device, 
+                               vid_dir=model_path, update_steps = global_step)
+
+            if global_step >= args.total_timesteps:
+                break
+        
+        envs.reset()
+        writer.add_scalar("charts/episodic_length", current_eps_len, global_step)
+        current_eps_len = 0
+        rewards_count = {}
 
     if args.save_model:
         model_path = f"runs/{run_name}/{args.exp_name}"
@@ -310,87 +326,8 @@ if __name__ == "__main__":
     del envs
     writer.close()
 
-    # visualize results
-    vis_env = make_env(args.env_id, args.seed, render=True)()
+    # visualize end results
+    gameplay_video(vis_env=vis_env, env_name=env_name, seed=args.seed, 
+                   q_networks=q_networks, device=device, vid_dir=model_path)
 
-    # play agains selfplay agents
-    vis_env.reset(args.seed + 1)
-    frames = [vis_env.render()]
-    recording_steps = 18000  # only record for 5 minutes at max
-
-    for steps, agent in enumerate(vis_env.agent_iter()):
-        observation, reward, termination, truncation, info = vis_env.last()
-        agent_handle = agent_handle = agent.split("_")[0]
-
-        if random.random() < 0.05:  # 5% random actions, similar to atari
-            action = np.random.randint(
-                0, specs[env_name]["action_shape"][agent_handle], size=(1,)
-            )
-        else:
-            with torch.no_grad():
-                q_value = q_networks[agent_handle](
-                    torch.Tensor(observation).permute(2, 0, 1).to(device)
-                )
-            action = torch.argmax(q_value, dim=1).cpu().numpy()
-        vis_env.step(action[0])
-        frames.append(vis_env.render())
-        if steps >= recording_steps or terminations or truncations:
-            break
-
-    import cv2
-
-    height, width, _ = frames[0].shape
-
-    out = cv2.VideoWriter(
-        "play_agains_self.mp4",
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        60,
-        (width, height),
-    )
-    for frame in frames:
-        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        out.write(frame_bgr)
-    out.release()
-
-    # play agains random agents
-    vis_env.reset()
-    frames = [vis_env.render()]
-
-    for steps, agent in enumerate(vis_env.agent_iter()):
-        observation, reward, termination, truncation, info = vis_env.last()
-        agent_handle = agent_handle = agent.split("_")[0]
-
-        # agents with the following handles act as random bot
-        random_agent = agent_handle in ["prey", "red", "redmelee", "redranged", "deer"]
-
-        if (
-            random_agent or random.random() < 0.05
-        ):  # 5% random actions, similar to atari
-            action = np.random.randint(
-                0, specs[env_name]["action_shape"][agent_handle], size=(1,)
-            )
-        else:
-            with torch.no_grad():
-                q_value = q_networks[agent_handle](
-                    torch.Tensor(observation).permute(2, 0, 1).to(device)
-                )
-            action = torch.argmax(q_value, dim=1).cpu().numpy()
-        vis_env.step(action[0])
-        frames.append(vis_env.render())
-        if steps >= recording_steps or terminations or truncations:
-            break
-
-    height, width, _ = frames[0].shape
-
-    out = cv2.VideoWriter(
-        "play_agains_random.mp4",
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        60,
-        (width, height),
-    )
-    for frame in frames:
-        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        out.write(frame_bgr)
-    out.release()
-
-    print("Done recording video")
+    vis_env.close()
