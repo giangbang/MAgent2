@@ -194,7 +194,7 @@ if __name__ == "__main__":
 
     # TRY NOT TO MODIFY: start the game
     envs.reset(seed=args.seed)
-    for global_step in range(args.total_timesteps):
+    for global_step, agent in enumerate(envs.agent_iter()):
         # ALGO LOGIC: put action logic here
         epsilon = linear_schedule(
             args.start_e,
@@ -203,34 +203,31 @@ if __name__ == "__main__":
             global_step,
         )
         current_eps_len += 1
-        for agent in envs.agent_iter():
-            agent_handle = agent.split("_")[0]
-            obs, _, _, _, _ = envs.last()
-            if random.random() < epsilon:
-                actions = np.random.randint(
-                    0, specs[env_name]["action_shape"][agent_handle], size=(1,)
-                )
-            else:
-                obs_tensor = torch.Tensor(obs).permute(2, 0, 1).to(device)
-                q_values = q_networks[agent_handle](obs_tensor)
-                actions = torch.argmax(q_values, dim=1).cpu().numpy()
+        agent_handle = agent.split("_")[0]
+        obs, _, _, _, _ = envs.last()
+        if random.random() < epsilon:
+            actions = np.random.randint(
+                0, specs[env_name]["action_shape"][agent_handle], size=(1,)
+            )
+        else:
+            obs_tensor = torch.Tensor(obs).permute(2, 0, 1).to(device)
+            q_values = q_networks[agent_handle](obs_tensor)
+            actions = torch.argmax(q_values, dim=1).cpu().numpy()
 
-            # TRY NOT TO MODIFY: execute the game and log data.
-            envs.step(actions[0])
-            next_obs, rewards, terminations, truncations, infos = envs.last()
-            rewards_count[agent] = rewards + getattr(rewards_count, agent, 0)
+        # TRY NOT TO MODIFY: execute the game and log data.
+        envs.step(actions[0])
+        next_obs, rewards, terminations, truncations, infos = envs.last()
+        rewards_count[agent] = rewards + getattr(rewards_count, agent, 0)
 
-            rbs[agent_handle].add(obs, next_obs, actions, rewards, terminations, infos)
+        rbs[agent_handle].add(obs, next_obs, actions, rewards, terminations, infos)
 
-            if truncations or terminations:
-                envs.reset()
-                r = np.sum(np.array(list(rewards_count.values())))
-                writer.add_scalar(f"charts/sum_episodic_return", r, global_step)
-                writer.add_scalar(
-                    "charts/episodic_length", current_eps_len, global_step
-                )
-                current_eps_len = 0
-                rewards_count = {}
+        if truncations or terminations:
+            envs.reset()
+            r = np.sum(np.array(list(rewards_count.values())))
+            writer.add_scalar(f"charts/sum_episodic_return", r, global_step)
+            writer.add_scalar("charts/episodic_length", current_eps_len, global_step)
+            current_eps_len = 0
+            rewards_count = {}
 
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
@@ -283,6 +280,9 @@ if __name__ == "__main__":
                             args.tau * q_network_param.data
                             + (1.0 - args.tau) * target_network_param.data
                         )
+
+        if global_step >= args.total_timesteps:
+            break
 
     if args.save_model:
         model_path = f"runs/{run_name}/{args.exp_name}"
