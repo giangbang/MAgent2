@@ -312,8 +312,11 @@ if __name__ == "__main__":
 
     # visualize results
     vis_env = make_env(args.env_id, args.seed, render=True)()
+
+    # play agains selfplay agents
     vis_env.reset(args.seed + 1)
     frames = [vis_env.render()]
+    recording_steps = 18000  # only record for 5 minutes at max
 
     for steps, agent in enumerate(vis_env.agent_iter()):
         observation, reward, termination, truncation, info = vis_env.last()
@@ -331,7 +334,7 @@ if __name__ == "__main__":
             action = torch.argmax(q_value, dim=1).cpu().numpy()
         vis_env.step(action[0])
         frames.append(vis_env.render())
-        if steps >= 3600 or terminations or truncations:  # only record for 1 minute
+        if steps >= recording_steps or terminations or truncations:
             break
 
     import cv2
@@ -339,7 +342,7 @@ if __name__ == "__main__":
     height, width, _ = frames[0].shape
 
     out = cv2.VideoWriter(
-        "output.mp4",
+        "play_agains_self.mp4",
         cv2.VideoWriter_fourcc(*"mp4v"),
         60,
         (width, height),
@@ -348,4 +351,46 @@ if __name__ == "__main__":
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         out.write(frame_bgr)
     out.release()
+
+    # play agains random agents
+    vis_env.reset()
+    frames = [vis_env.render()]
+
+    for steps, agent in enumerate(vis_env.agent_iter()):
+        observation, reward, termination, truncation, info = vis_env.last()
+        agent_handle = agent_handle = agent.split("_")[0]
+
+        # agents with the following handles act as random bot
+        random_agent = agent_handle in ["prey", "red", "redmelee", "redranged", "deer"]
+
+        if (
+            random_agent or random.random() < 0.05
+        ):  # 5% random actions, similar to atari
+            action = np.random.randint(
+                0, specs[env_name]["action_shape"][agent_handle], size=(1,)
+            )
+        else:
+            with torch.no_grad():
+                q_value = q_networks[agent_handle](
+                    torch.Tensor(observation).permute(2, 0, 1).to(device)
+                )
+            action = torch.argmax(q_value, dim=1).cpu().numpy()
+        vis_env.step(action[0])
+        frames.append(vis_env.render())
+        if steps >= recording_steps or terminations or truncations:
+            break
+
+    height, width, _ = frames[0].shape
+
+    out = cv2.VideoWriter(
+        "play_agains_random.mp4",
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        60,
+        (width, height),
+    )
+    for frame in frames:
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        out.write(frame_bgr)
+    out.release()
+
     print("Done recording video")

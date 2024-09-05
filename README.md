@@ -19,6 +19,12 @@ pip install .
 ```
 Do not install with interactive mode, see issue [#19](https://github.com/Farama-Foundation/MAgent2/issues/19). Also, run from an interactive jupyter notebook seems to not working.
 
+## Selfplay training with dqn
+to run selfplay, install `tyro` by `pip install tyro`, then run
+```
+python selfplay/train.py
+```
+
 ## Requirements
 MAgent2 supports Linux and macOS and Python 3.8+.
 
