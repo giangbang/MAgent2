@@ -44,21 +44,21 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "battle_v4"
     """the id of the environment"""
-    total_timesteps: int = 5000
+    total_timesteps: int = 5000000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments, always fixed with magent"""
-    buffer_size: int = 1000
+    buffer_size: int = 100000
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
     tau: float = 1.0
     """the target network update rate"""
-    target_network_frequency: int = 50
+    target_network_frequency: int = 500
     """the timesteps it takes to update the target network"""
-    batch_size: int = 64
+    batch_size: int = 128
     """the batch size of sample from the reply memory"""
     start_e: float = 1
     """the starting epsilon for exploration"""
@@ -66,9 +66,9 @@ class Args:
     """the ending epsilon for exploration"""
     exploration_fraction: float = 0.5
     """the fraction of `total-timesteps` it takes from start-e to go end-e"""
-    learning_starts: int = 100
+    learning_starts: int = 10000
     """timestep to start learning"""
-    train_frequency: int = 1
+    train_frequency: int = 10
     """the frequency of training"""
 
 
@@ -96,11 +96,10 @@ class QNetwork(nn.Module):
             nn.ReLU(),
             nn.Conv2d(observation_shape[-1], observation_shape[-1], 3),
             nn.ReLU(),
-            nn.Flatten(),
         )
         dummy_input = torch.randn(observation_shape).permute(2, 0, 1)
         dummy_output = self.cnn(dummy_input)
-        flatten_dim = dummy_output.shape[-1]
+        flatten_dim = dummy_output.view(-1).shape[0]
         self.network = nn.Sequential(
             nn.Linear(flatten_dim, 120),
             nn.ReLU(),
@@ -110,7 +109,13 @@ class QNetwork(nn.Module):
         )
 
     def forward(self, x):
+        assert len(x.shape) >= 3, "only support magent input observation"
         x = self.cnn(x)
+        if len(x.shape) == 3:
+            batchsize = 1
+        else:
+            batchsize = x.shape[0]
+        x = x.reshape(batchsize, -1)
         return self.network(x)
 
 
@@ -210,9 +215,12 @@ if __name__ == "__main__":
                 0, specs[env_name]["action_shape"][agent_handle], size=(1,)
             )
         else:
-            obs_tensor = torch.Tensor(obs).permute(2, 0, 1).to(device)
-            q_values = q_networks[agent_handle](obs_tensor)
+            obs_tensor = torch.Tensor(obs).float().permute(2, 0, 1).to(device)
+            with torch.no_grad():
+                q_values = q_networks[agent_handle](obs_tensor)
+            assert len(q_values.shape) == 2
             actions = torch.argmax(q_values, dim=1).cpu().numpy()
+            assert np.prod(actions.shape) == 1
 
         # TRY NOT TO MODIFY: execute the game and log data.
         envs.step(actions[0])
@@ -222,6 +230,9 @@ if __name__ == "__main__":
         rbs[agent_handle].add(obs, next_obs, actions, rewards, terminations, infos)
 
         if truncations or terminations:
+            # a single episode can have tens of thousands of step
+            # this is expected since the default maximal env step is 1k
+            # each env step consist of all individual agent steps, making up, for example, ~ 126k steps at worst in battle_v4
             envs.reset()
             r = np.sum(np.array(list(rewards_count.values())))
             writer.add_scalar(f"charts/sum_episodic_return", r, global_step)
@@ -254,12 +265,16 @@ if __name__ == "__main__":
                     loss.backward()
                     optimizer.step()
 
-                if global_step % 20 == 0:
+                if global_step % 5000 == 0:
                     writer.add_scalar("losses/td_loss", loss, global_step)
                     writer.add_scalar(
                         "losses/q_values", old_val.mean().item(), global_step
                     )
-                    print("SPS:", int(global_step / (time.time() - start_time)))
+                    print(
+                        "SPS:",
+                        int(global_step / (time.time() - start_time)),
+                        f", {global_step}/{args.total_timesteps}",
+                    )
                     writer.add_scalar(
                         "charts/SPS",
                         int(global_step / (time.time() - start_time)),
@@ -286,6 +301,7 @@ if __name__ == "__main__":
 
     if args.save_model:
         model_path = f"runs/{run_name}/{args.exp_name}"
+        os.makedirs(model_path, exist_ok=True)
         for handle, q_network in q_networks.items():
             torch.save(q_network.state_dict(), os.path.join(model_path, handle + ".pt"))
         print(f"model saved to {model_path}")
@@ -295,29 +311,41 @@ if __name__ == "__main__":
     writer.close()
 
     # visualize results
-    vis_env = make_env(args.env_id, args.seed + 1, render=True)()
-    vis_env.reset()
-    frames = vis_env.render()
+    vis_env = make_env(args.env_id, args.seed, render=True)()
+    vis_env.reset(args.seed + 1)
+    frames = [vis_env.render()]
 
-    stop = False
-    while not stop:
-        for agent in vis_env.agent_iter():
-            observation, reward, termination, truncation, info = vis_env.last()
-            agent_handle = agent_handle = agent.split("_")[0]
+    for steps, agent in enumerate(vis_env.agent_iter()):
+        observation, reward, termination, truncation, info = vis_env.last()
+        agent_handle = agent_handle = agent.split("_")[0]
 
-            q_value = q_networks[agent_handle](torch.Tensor(observation).to(device))
+        if random.random() < 0.05:  # 5% random actions, similar to atari
+            action = np.random.randint(
+                0, specs[env_name]["action_shape"][agent_handle], size=(1,)
+            )
+        else:
+            with torch.no_grad():
+                q_value = q_networks[agent_handle](
+                    torch.Tensor(observation).permute(2, 0, 1).to(device)
+                )
             action = torch.argmax(q_value, dim=1).cpu().numpy()
-            vis_env.step(action)
-            frames.append(vis_env.render())
-            if terminations or truncations:
-                stop = True
-                break
+        vis_env.step(action[0])
+        frames.append(vis_env.render())
+        if steps >= 3600 or terminations or truncations:  # only record for 1 minute
+            break
 
     import cv2
 
+    height, width, _ = frames[0].shape
+
     out = cv2.VideoWriter(
-        "output.mp4", cv2.VideoWriter_fourcc(*"mp4v"), 30, frames[0].shape[:2]
+        "output.mp4",
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        60,
+        (width, height),
     )
     for frame in frames:
-        out.write(frame)
+        frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        out.write(frame_bgr)
     out.release()
+    print("Done recording video")

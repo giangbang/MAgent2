@@ -231,14 +231,14 @@ class ReplayBuffer(BaseBuffer):
 
         self.observations = np.zeros(
             (self.buffer_size, self.n_envs, *self.obs_shape),
-            dtype=float,
+            dtype=np.float32,
         )
 
         if not optimize_memory_usage:
             # When optimizing memory, `observations` contains also the next observation
             self.next_observations = np.zeros(
                 (self.buffer_size, self.n_envs, *self.obs_shape),
-                dtype=float,
+                dtype=np.float32,
             )
 
         self.actions = np.zeros(
