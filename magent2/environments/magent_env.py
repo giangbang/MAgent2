@@ -5,13 +5,14 @@ from pettingzoo.utils import wrappers
 from pettingzoo.utils.env import ParallelEnv
 
 from magent2 import Renderer
+import magent2
 
 
 def make_env(raw_env):
     def env_fn(**kwargs):
         env = raw_env(**kwargs)
-        env = wrappers.AssertOutOfBoundsWrapper(env)
-        env = wrappers.OrderEnforcingWrapper(env)
+        # env = wrappers.AssertOutOfBoundsWrapper(env)
+        # env = wrappers.OrderEnforcingWrapper(env)
         return env
 
     return env_fn
@@ -20,7 +21,7 @@ def make_env(raw_env):
 class magent_parallel_env(ParallelEnv):
     def __init__(
         self,
-        env,
+        env: magent2.GridWorld,
         active_handles,
         names,
         map_size,
@@ -288,3 +289,6 @@ class magent_parallel_env(ParallelEnv):
         if self.render_mode == "human":
             self.render()
         return observations, rewards, terminations, truncations, infos
+
+    def generate_map(self):
+        raise NotImplementedError("Should be implemented by subclasses.")

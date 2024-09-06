@@ -1,5 +1,6 @@
 from magent2 import gridworld, utility
 from magent2.render import Renderer
+import magent2.environments
 
 
 # some alias
