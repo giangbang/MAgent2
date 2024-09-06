@@ -47,7 +47,7 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "battle_v4"
     """the id of the environment"""
-    total_timesteps: int = 500000
+    total_timesteps: int = 50000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
@@ -202,7 +202,6 @@ if __name__ == "__main__":
         )
         for group in specs[env_name]["agent_groups"]
     }  # each group corresponds to a seperate replay buffer, they share experience within each group
-    rewards_count = {}
     current_eps_len = 0
 
     opponent_groups = []
@@ -211,6 +210,7 @@ if __name__ == "__main__":
 
     env = envs.env
     start_time = time.time()
+    current_rewards_of_blueteam = 0
 
     # TRY NOT TO MODIFY: start the game
     envs.reset(seed=args.seed)
@@ -255,6 +255,13 @@ if __name__ == "__main__":
             termin = np.array((terminations[agent],))
             a = np.array((_actions[agent],))
             rbs[group].add(obs[agent], next_obs[agent], a, r, termin, [{}])
+
+        # LOGGING REWARD
+        if args.random_opponent:
+            for agent, r in rewards.items():
+                agent_group = agent.split("_")[0]
+                if agent_group not in opponent_groups:
+                    current_rewards_of_blueteam += r
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         # obs = next_obs
@@ -336,10 +343,12 @@ if __name__ == "__main__":
         if len(envs.agents) == 0:
             obs, _ = envs.reset()
             print(f"A new episode restarts at step {global_step}...")
+            if args.random_opponent:
+                print("Episode reward of blueteam:", current_rewards_of_blueteam)
 
             writer.add_scalar("charts/episodic_length", current_eps_len, global_step)
             current_eps_len = 0
-            rewards_count = {}
+            current_rewards_of_blueteam = 0
 
     if args.save_model:
         model_path = f"runs/{run_name}/{args.exp_name}"
