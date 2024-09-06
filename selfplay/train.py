@@ -47,19 +47,19 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "battle_v4"
     """the id of the environment"""
-    total_timesteps: int = 5000000
+    total_timesteps: int = 500000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments, always fixed with magent"""
-    buffer_size: int = 100000
+    buffer_size: int = 10000
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
     tau: float = 1.0
     """the target network update rate"""
-    target_network_frequency: int = 500
+    target_network_frequency: int = 20
     """the timesteps it takes to update the target network"""
     batch_size: int = 128
     """the batch size of sample from the reply memory"""
@@ -69,7 +69,7 @@ class Args:
     """the ending epsilon for exploration"""
     exploration_fraction: float = 0.5
     """the fraction of `total-timesteps` it takes from start-e to go end-e"""
-    learning_starts: int = 10000
+    learning_starts: int = 1000
     """timestep to start learning"""
     train_frequency: int = 10
     """the frequency of training"""
@@ -210,24 +210,19 @@ if __name__ == "__main__":
         opponent_groups = ["prey", "red", "redmelee", "redranged", "deer"]
 
     env = envs.env
-    handles = env.get_handles()
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
     envs.reset(seed=args.seed)
     for global_step in range(args.total_timesteps):
-
         epsilon = linear_schedule(
             args.start_e,
             args.end_e,
             args.exploration_fraction * args.total_timesteps,
             global_step,
         )
-
-        for i in range(len(handles)):
-            ids = env.get_agent_id(handles[i])
-
         _actions = {}
+        obs = envs._compute_observations()
         current_eps_len += 1
         for agent in envs.agents:
             # ALGO LOGIC: put action logic here
@@ -262,7 +257,7 @@ if __name__ == "__main__":
             rbs[group].add(obs[agent], next_obs[agent], a, r, termin, [{}])
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
-        obs = next_obs
+        # obs = next_obs
 
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
@@ -289,7 +284,7 @@ if __name__ == "__main__":
                     loss.backward()
                     optimizer.step()
 
-                if global_step % 20000 == 0:
+                if global_step % 1000 == 0:
                     writer.add_scalar("losses/td_loss", loss, global_step)
                     writer.add_scalar(
                         "losses/q_values", old_val.mean().item(), global_step
@@ -340,7 +335,7 @@ if __name__ == "__main__":
         # as dead agents and truncated one are excluded from this list
         if len(envs.agents) == 0:
             obs, _ = envs.reset()
-            print("A new episode restarts...")
+            print(f"A new episode restarts at step {global_step}...")
 
             writer.add_scalar("charts/episodic_length", current_eps_len, global_step)
             current_eps_len = 0

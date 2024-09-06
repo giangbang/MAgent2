@@ -38,6 +38,9 @@ class magent_parallel_env(ParallelEnv):
         self.minimap_mode = minimap_mode
         self.extra_features = extra_features
         self.env = env
+
+        # save agent names, such as `blue`, `red`, `deer`, `tiger`, etc
+        self.names = names
         self.handles = active_handles
         self._all_handles = self.env.get_handles()
         env.reset()
@@ -101,9 +104,6 @@ class magent_parallel_env(ParallelEnv):
         self._renderer = None
         self.frames = 0
 
-        # save agent names, such as `blue`, `red`, `deer`, `tiger`, etc
-        self.names = names
-
     def observation_space_of_agent_name(self, name: str):
         """
         Given agent type name, for example `deer`, return the observation space of that agent type
@@ -147,7 +147,7 @@ class magent_parallel_env(ParallelEnv):
         assert name in self.names, f"`{name}` is not recognized."
         handle = self._name2handle[name]
         return self._compute_obs(handle), self.env.get_alive(handle)
-    
+
     def set_actions(self, handle: ctypes.c_int32, actions: np.ndarray):
         self.env.set_action(handle, actions)
 
