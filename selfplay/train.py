@@ -162,56 +162,59 @@ if __name__ == "__main__":
 
     # env setup
     import magent2.environments.magent_env
-    envs: magent2.environments.magent_env.magent_parallel_env = make_env(args.env_id, args.seed)()
+
+    envs: magent2.environments.magent_env.magent_parallel_env = make_env(
+        args.env_id, args.seed
+    )()
     vis_env = make_env(args.env_id, args.seed, render=True)()
     env_name = "_".join(args.env_id.split("_")[:-1])
 
     from magent2.specs import specs
 
     q_networks = {
-        handle: QNetwork(
-            specs[env_name]["observation_shape"][handle],
-            specs[env_name]["action_shape"][handle],
+        group: QNetwork(
+            specs[env_name]["observation_shape"][group],
+            specs[env_name]["action_shape"][group],
         ).to(device)
-        for handle in specs[env_name]["handle_groups"]
+        for group in specs[env_name]["agent_groups"]
     }
     optimizers = {
-        handle: optim.Adam(q_network.parameters(), lr=args.learning_rate)
-        for handle, q_network in q_networks.items()
+        group: optim.Adam(q_network.parameters(), lr=args.learning_rate)
+        for group, q_network in q_networks.items()
     }
     target_networks = {
-        handle: QNetwork(
-            specs[env_name]["observation_shape"][handle],
-            specs[env_name]["action_shape"][handle],
+        group: QNetwork(
+            specs[env_name]["observation_shape"][group],
+            specs[env_name]["action_shape"][group],
         ).to(device)
-        for handle in specs[env_name]["handle_groups"]
+        for group in specs[env_name]["agent_groups"]
     }
-    for handle, target_network in target_networks.items():
-        target_network.load_state_dict(q_networks[handle].state_dict())
+    for group, target_network in target_networks.items():
+        target_network.load_state_dict(q_networks[group].state_dict())
 
     rbs = {
-        handle: ReplayBuffer(
+        group: ReplayBuffer(
             args.buffer_size,
-            specs[env_name]["observation_shape"][handle],
+            specs[env_name]["observation_shape"][group],
             1,  # discrete action
             device,
             handle_timeout_termination=False,
         )
-        for handle in specs[env_name]["handle_groups"]
-    }  # each handle group corresponds to a seperate replay buffer, they share experience within each group
+        for group in specs[env_name]["agent_groups"]
+    }  # each group corresponds to a seperate replay buffer, they share experience within each group
     rewards_count = {}
     current_eps_len = 0
 
-    opponent_handles = []
-    if args.random_opponent: # red is enemy, act random
-        opponent_handles = ["prey", "red", "redmelee", "redranged", "deer"]
+    opponent_groups = []
+    if args.random_opponent:  # red is enemy, act random
+        opponent_groups = ["prey", "red", "redmelee", "redranged", "deer"]
 
+    env = envs.env
+    handles = env.get_handles()
     start_time = time.time()
 
     # TRY NOT TO MODIFY: start the game
-    print(envs.reset(seed=args.seed))
-    obs, _ = envs.reset(seed=args.seed)
-    obs: dict
+    envs.reset(seed=args.seed)
     for global_step in range(args.total_timesteps):
 
         epsilon = linear_schedule(
@@ -221,19 +224,26 @@ if __name__ == "__main__":
             global_step,
         )
 
+        for i in range(len(handles)):
+            ids = env.get_agent_id(handles[i])
+
         _actions = {}
         current_eps_len += 1
         for agent in envs.agents:
             # ALGO LOGIC: put action logic here
-            agent_handle = agent.split("_")[0]
-            if random.random() < epsilon or (args.random_opponent and agent_handle in opponent_handles):
+            group = agent.split("_")[0]
+            if random.random() < epsilon or (
+                args.random_opponent and group in opponent_groups
+            ):
                 actions = np.random.randint(
-                    0, specs[env_name]["action_shape"][agent_handle], size=(1,)
+                    0, specs[env_name]["action_shape"][group], size=(1,)
                 )
             else:
-                obs_tensor = torch.Tensor(obs[agent]).float().permute(2, 0, 1).to(device)
+                obs_tensor = (
+                    torch.Tensor(obs[agent]).float().permute(2, 0, 1).to(device)
+                )
                 with torch.no_grad():
-                    q_values = q_networks[agent_handle](obs_tensor)
+                    q_values = q_networks[group](obs_tensor)
                 assert len(q_values.shape) == 2
                 actions = torch.argmax(q_values, dim=1).cpu().numpy()
                 assert np.prod(actions.shape) == 1
@@ -245,11 +255,11 @@ if __name__ == "__main__":
 
         # TRY NOT TO MODIFY: save data to reply buffer;
         for agent in obs.keys():
-            agent_handle = agent.split("_")[0]
-            r = np.array((rewards[agent], ))
-            termin = np.array((terminations[agent], ))
-            a = np.array((_actions[agent], ))
-            rbs[agent_handle].add(obs[agent], next_obs[agent], a, r, termin, [{}])
+            group = agent.split("_")[0]
+            r = np.array((rewards[agent],))
+            termin = np.array((terminations[agent],))
+            a = np.array((_actions[agent],))
+            rbs[group].add(obs[agent], next_obs[agent], a, r, termin, [{}])
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obs = next_obs
@@ -297,7 +307,7 @@ if __name__ == "__main__":
 
             # update target network
             if global_step % args.target_network_frequency == 0:
-                for handle in specs[env_name]["handle_groups"]:
+                for handle in specs[env_name]["agent_groups"]:
                     target_network, q_network = (
                         target_networks[handle],
                         q_networks[handle],
@@ -313,19 +323,25 @@ if __name__ == "__main__":
         # log video after every 1m steps
         if (global_step + 1) % int(1e6) == 0 and False:
             model_path = f"runs/{run_name}/{args.exp_name}"
-            gameplay_video(vis_env=vis_env, env_name=env_name, seed=args.seed, 
-                        q_networks=q_networks, device=device, 
-                        vid_dir=model_path, update_steps = global_step)
+            gameplay_video(
+                vis_env=vis_env,
+                env_name=env_name,
+                seed=args.seed,
+                q_networks=q_networks,
+                device=device,
+                vid_dir=model_path,
+                update_steps=global_step,
+            )
 
         if global_step >= args.total_timesteps:
             break
-        
+
         # this agents list already handle termination and truncation
         # as dead agents and truncated one are excluded from this list
         if len(envs.agents) == 0:
             obs, _ = envs.reset()
             print("A new episode restarts...")
-            
+
             writer.add_scalar("charts/episodic_length", current_eps_len, global_step)
             current_eps_len = 0
             rewards_count = {}
@@ -342,7 +358,13 @@ if __name__ == "__main__":
     writer.close()
 
     # visualize end results
-    gameplay_video(vis_env=vis_env, env_name=env_name, seed=args.seed, 
-                   q_networks=q_networks, device=device, vid_dir=model_path)
+    gameplay_video(
+        vis_env=vis_env,
+        env_name=env_name,
+        seed=args.seed,
+        q_networks=q_networks,
+        device=device,
+        vid_dir=model_path,
+    )
 
     vis_env.close()
