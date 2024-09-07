@@ -1,3 +1,5 @@
+"""This file is mostly for debugging purpose"""
+
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/dqn/#dqnpy
 import copy
 import os
@@ -59,7 +61,7 @@ class Args:
     """the discount factor gamma"""
     tau: float = 1.0
     """the target network update rate"""
-    target_network_frequency: int = 20
+    target_network_frequency: int = 10
     """the timesteps it takes to update the target network"""
     batch_size: int = 128
     """the batch size of sample from the reply memory"""
@@ -71,7 +73,7 @@ class Args:
     """the fraction of `total-timesteps` it takes from start-e to go end-e"""
     learning_starts: int = 1000
     """timestep to start learning"""
-    train_frequency: int = 10
+    train_frequency: int = 1
     """the frequency of training"""
     random_opponent: bool = True
     """training against other dqn agents or random agents"""
@@ -335,7 +337,7 @@ if __name__ == "__main__":
                         )
 
         # log video after every 1m steps
-        if (global_step + 1) % int(1e6) == 0 and False:
+        if (global_step + 1) % int(1e5) == 0:
             model_path = f"runs/{run_name}/{args.exp_name}"
             gameplay_video(
                 vis_env=vis_env,
