@@ -79,6 +79,8 @@ class Args:
     """training against other dqn agents or random agents"""
     sum_reward: bool = True
     """Training with reward sum of all agent in blueteam, for debuging purpose"""
+    video_frequency: int = 10_000
+    """Frequency for logging video training"""
 
 
 def make_env(env_id, seed, render=False):
@@ -336,8 +338,9 @@ if __name__ == "__main__":
                             + (1.0 - args.tau) * target_network_param.data
                         )
 
-        # log video after every 1m steps
-        if (global_step + 1) % int(1e5) == 0:
+        # VIDEO LOGGING
+        if (global_step + 1) % args.video_frequency == 0:
+            print("Logging video...")
             model_path = f"runs/{run_name}/{args.exp_name}"
             gameplay_video(
                 vis_env=vis_env,
@@ -353,7 +356,7 @@ if __name__ == "__main__":
         # as dead agents and truncated one are excluded from this list
         if len(envs.agents) == 0:
             obs, _ = envs.reset()
-            print(f"A new episode restarts at step {global_step}...")
+            print(f"A new episode restarts at step {global_step+1}...")
             if args.random_opponent:
                 print("Episode reward of blueteam:", current_rewards_of_blueteam)
 

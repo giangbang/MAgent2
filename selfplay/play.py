@@ -15,21 +15,20 @@ def gameplay_video(
     # play agains selfplay agents
     vis_env.reset(seed + 1)
     print("Number of agents:", len(vis_env.agents))
-    max_steps = 36000
     fps = 30
     frames = []
 
-    while len(vis_env.agents()) > 0:
+    while len(vis_env.agents) > 0:
         frames.append(vis_env.render())
 
         actions = {}
         observation = vis_env._compute_observations()
 
-        for agent in vis_env.agents():
+        for agent in vis_env.agents:
             agent_handle = agent.split("_")[0]
 
             if random.random() < 0.05:  # 5% random actions, similar to atari
-                action = vis_env.action_space(agent).sample()
+                action = vis_env.action_space_of_agent(agent).sample()
             else:
                 with torch.no_grad():
                     q_value = q_networks[agent_handle](
@@ -63,13 +62,13 @@ def gameplay_video(
     vis_env.reset()
     frames = [vis_env.render()]
 
-    while len(vis_env.agents()) > 0:
+    while len(vis_env.agents) > 0:
         frames.append(vis_env.render())
 
         actions = {}
         observation = vis_env._compute_observations()
 
-        for agent in vis_env.agents():
+        for agent in vis_env.agents:
             agent_handle = agent.split("_")[0]
 
             # agents with the following handles act as random bot
@@ -84,7 +83,7 @@ def gameplay_video(
             if (
                 random_agent or random.random() < 0.05
             ):  # 5% random actions, similar to atari
-                action = vis_env.action_space(agent).sample()
+                action = vis_env.action_space_of_agent(agent).sample()
             else:
                 with torch.no_grad():
                     q_value = q_networks[agent_handle](
