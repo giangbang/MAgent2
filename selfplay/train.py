@@ -75,9 +75,9 @@ class Args:
     """timestep to start learning"""
     train_frequency: int = 1
     """the frequency of training"""
-    random_opponent: bool = True
+    random_opponent: bool = False
     """training against other dqn agents or random agents"""
-    sum_reward: bool = True
+    sum_reward: bool = False
     """Training with reward sum of all agent in blueteam, for debuging purpose"""
     video_frequency: int = 10_000
     """Frequency for logging video training"""
@@ -138,6 +138,7 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
 if __name__ == "__main__":
     args = tyro.cli(Args)
     assert args.num_envs == 1, "vectorized envs are not supported at the moment"
+    print(args)
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
