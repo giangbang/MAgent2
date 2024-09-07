@@ -19,7 +19,7 @@ def gameplay_video(
     fps = 30
     frames = []
 
-    while len(vis_env.agent()) > 0:
+    while len(vis_env.agents()) > 0:
         frames.append(vis_env.render())
 
         actions = {}
@@ -63,7 +63,7 @@ def gameplay_video(
     vis_env.reset()
     frames = [vis_env.render()]
 
-    while len(vis_env.agent()) > 0:
+    while len(vis_env.agents()) > 0:
         frames.append(vis_env.render())
 
         actions = {}
