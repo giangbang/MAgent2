@@ -349,9 +349,6 @@ if __name__ == "__main__":
                 update_steps=global_step,
             )
 
-        if global_step >= args.total_timesteps:
-            break
-
         # this agents list already handle termination and truncation
         # as dead agents and truncated one are excluded from this list
         if len(envs.agents) == 0:

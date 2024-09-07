@@ -25,7 +25,7 @@ def gameplay_video(
         actions = {}
         observation = vis_env._compute_observations()
 
-        for agent in vis_env.agent():
+        for agent in vis_env.agents():
             agent_handle = agent.split("_")[0]
 
             if random.random() < 0.05:  # 5% random actions, similar to atari
@@ -69,7 +69,7 @@ def gameplay_video(
         actions = {}
         observation = vis_env._compute_observations()
 
-        for agent in vis_env.agent():
+        for agent in vis_env.agents():
             agent_handle = agent.split("_")[0]
 
             # agents with the following handles act as random bot
