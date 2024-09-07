@@ -213,6 +213,9 @@ class magent_parallel_env(ParallelEnv):
         return self._compute_observations(), {}
 
     def _compute_obs(self, handle):
+        """
+        Return raw observations of each agent
+        """
         view, features = self.env.get_observation(handle)
 
         if self.minimap_mode and not self.extra_features:
@@ -226,6 +229,9 @@ class magent_parallel_env(ParallelEnv):
         return fin_obs
 
     def _compute_observations(self):
+        """
+        Return dict form of observations of each agent
+        """
         observes = [None] * self.max_num_agents
         for handle in self.handles:
             ids = self.env.get_agent_id(handle)
@@ -250,6 +256,9 @@ class magent_parallel_env(ParallelEnv):
         }
 
     def _compute_rewards(self):
+        """
+        Return dict form of rewards of each agent
+        """
         rewards = np.zeros(self.max_num_agents)
         for handle in self.handles:
             ids = self.env.get_agent_id(handle)
@@ -262,6 +271,9 @@ class magent_parallel_env(ParallelEnv):
         }
 
     def _compute_terminates(self, step_done):
+        """
+        Return dict form of termination states of each agent
+        """
         dones = np.ones(self.max_num_agents, dtype=bool)
         if not step_done:
             for i, handle in enumerate(self.handles):
@@ -313,6 +325,10 @@ class magent_parallel_env(ParallelEnv):
         return state
 
     def step(self, all_actions):
+        """
+        Perform one step update to the environment,
+        returns result in dict form of each agent
+        """
         action_list = [-1] * len(self.agents)
         for i, agent in enumerate(self.agents):
             if agent in all_actions:

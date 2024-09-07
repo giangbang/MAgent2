@@ -364,8 +364,8 @@ if __name__ == "__main__":
             current_eps_len = 0
             current_rewards_of_blueteam = 0
 
+    model_path = f"runs/{run_name}/{args.exp_name}"
     if args.save_model:
-        model_path = f"runs/{run_name}/{args.exp_name}"
         os.makedirs(model_path, exist_ok=True)
         for handle, q_network in q_networks.items():
             torch.save(q_network.state_dict(), os.path.join(model_path, handle + ".pt"))
