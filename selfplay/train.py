@@ -75,6 +75,8 @@ class Args:
     """the frequency of training"""
     random_opponent: bool = True
     """training against other dqn agents or random agents"""
+    sum_reward: bool = True
+    """Training with reward sum of all agent in blueteam, for debuging purpose"""
 
 
 def make_env(env_id, seed, render=False):
@@ -248,10 +250,20 @@ if __name__ == "__main__":
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, terminations, truncations, infos = envs.step(_actions)
 
+        if args.sum_reward:
+            sum_rw = 0
+            for agent in obs.keys():
+                group = agent.split("_")[0]
+                if group not in opponent_groups:
+                    sum_rw += rewards[agent]
+            sum_rw = np.array((sum_rw,))
+
         # TRY NOT TO MODIFY: save data to reply buffer;
         for agent in obs.keys():
             group = agent.split("_")[0]
             r = np.array((rewards[agent],))
+            if args.sum_reward:
+                r = sum_rw
             termin = np.array((terminations[agent],))
             a = np.array((_actions[agent],))
             rbs[group].add(obs[agent], next_obs[agent], a, r, termin, [{}])
