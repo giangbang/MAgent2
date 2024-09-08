@@ -162,11 +162,14 @@ def raw_env(
     seed=None,
     **reward_args,
 ):
-    return parallel_to_aec_wrapper(
-        parallel_env(
+    # return parallel_to_aec_wrapper(
+    #     parallel_env(
+    #         map_size, max_cycles, minimap_mode, extra_features, seed=seed, **reward_args
+    #     )
+    # )
+    return parallel_env(
             map_size, max_cycles, minimap_mode, extra_features, seed=seed, **reward_args
         )
-    )
 
 
 env = make_env(raw_env)

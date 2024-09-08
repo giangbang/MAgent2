@@ -1,17 +1,20 @@
+import ctypes
 import numpy as np
+from typing import List
 from gymnasium.spaces import Box, Discrete
 from gymnasium.utils import seeding
 from pettingzoo.utils import wrappers
 from pettingzoo.utils.env import ParallelEnv
 
 from magent2 import Renderer
+import magent2
 
 
 def make_env(raw_env):
     def env_fn(**kwargs):
         env = raw_env(**kwargs)
-        env = wrappers.AssertOutOfBoundsWrapper(env)
-        env = wrappers.OrderEnforcingWrapper(env)
+        # env = wrappers.AssertOutOfBoundsWrapper(env)
+        # env = wrappers.OrderEnforcingWrapper(env)
         return env
 
     return env_fn
@@ -20,14 +23,14 @@ def make_env(raw_env):
 class magent_parallel_env(ParallelEnv):
     def __init__(
         self,
-        env,
-        active_handles,
-        names,
+        env: magent2.GridWorld,
+        active_handles: List[ctypes.c_int32],
+        names: List[str],
         map_size,
-        max_cycles,
+        max_cycles: int,
         reward_range,
-        minimap_mode,
-        extra_features,
+        minimap_mode: bool,
+        extra_features: bool,
         render_mode=None,
     ):
         self.map_size = map_size
@@ -35,6 +38,9 @@ class magent_parallel_env(ParallelEnv):
         self.minimap_mode = minimap_mode
         self.extra_features = extra_features
         self.env = env
+
+        # save agent names, such as `blue`, `red`, `deer`, `tiger`, etc
+        self.names = names
         self.handles = active_handles
         self._all_handles = self.env.get_handles()
         env.reset()
@@ -50,9 +56,7 @@ class magent_parallel_env(ParallelEnv):
         self.possible_agents = self.agents[:]
         num_actions = [env.get_action_space(handle)[0] for handle in self.handles]
         action_spaces_list = [
-            Discrete(num_actions[j])
-            for j in range(len(self.team_sizes))
-            for i in range(self.team_sizes[j])
+            Discrete(num_actions[j]) for j in range(len(self.team_sizes))
         ]
         # may change depending on environment config? Not sure.
         team_obs_shapes = self._calc_obs_shapes()
@@ -60,7 +64,6 @@ class magent_parallel_env(ParallelEnv):
         observation_space_list = [
             Box(low=0.0, high=2.0, shape=team_obs_shapes[j], dtype=np.float32)
             for j in range(len(self.team_sizes))
-            for i in range(self.team_sizes[j])
         ]
 
         self.state_space = Box(low=0.0, high=2.0, shape=state_shape, dtype=np.float32)
@@ -80,34 +83,76 @@ class magent_parallel_env(ParallelEnv):
             self.state_space.high[:, :, idx_state] = reward_high
 
         self.action_spaces = {
-            agent: space for agent, space in zip(self.agents, action_spaces_list)
+            name: space for name, space in zip(names, action_spaces_list)
         }
         self.observation_spaces = {
-            agent: space for agent, space in zip(self.agents, observation_space_list)
+            name: space for name, space in zip(names, observation_space_list)
         }
 
+        self._name2handle = {n: h for n, h in zip(names, self._all_handles)}
+        self._handle2name = {h: n for h, n in zip(names, self._all_handles)}
+
         self._zero_obs = {
-            agent: np.zeros_like(space.low)
-            for agent, space in self.observation_spaces.items()
+            agent: np.zeros_like(self.observation_space_of_agent(agent).low)
+            for agent in self.agents
         }
         self.base_state = np.zeros(self.state_space.shape, dtype="float32")
-        walls = self.env._get_walls_info()
+        walls = self.env._get_walls_info()  # type: ignore
         wall_x, wall_y = zip(*walls)
         self.base_state[wall_x, wall_y, 0] = 1
         self.render_mode = render_mode
         self._renderer = None
         self.frames = 0
 
-    def observation_space(self, agent):
-        return self.observation_spaces[agent]
+    def observation_space_of_agent_name(self, name: str):
+        """
+        Given agent type name, for example `deer`, return the observation space of that agent type
+        This is helpful e.g. when agents in the same group share weights
+        """
+        assert name in self.names
+        return self.observation_spaces[name]
 
-    def action_space(self, agent):
-        return self.action_spaces[agent]
+    def action_space_of_agent_name(self, name: str):
+        """
+        Given agent type name, for example `deer`, return the action space of that agent type
+        This is helpful e.g. when agents in the same group share weights
+        """
+        assert name in self.names
+        return self.action_spaces[name]
+
+    def observation_space_of_agent(self, agent: str):
+        """
+        Given an agent, for example `deer_10`, return the action space of that single agent
+        This is helpful e.g. when agents in the same group do not share weights
+        """
+        name = "_".join(agent.split("_")[:-1])
+        assert name in self.names, f"`{name}` is not recognized."
+        return self.observation_spaces[name]
+
+    def action_space_of_agent(self, agent: str):
+        """
+        Given an agent, for example `deer_10`, return the action space of that single agent
+        This is helpful e.g. when agents in the same group do not share weights
+        """
+        name = "_".join(agent.split("_")[:-1])
+        assert name in self.names, f"`{name}` is not recognized."
+        return self.action_spaces[name]
 
     def seed(self, seed=None):
         if seed is None:
             _, seed = seeding.np_random()
         self.env.set_seed(seed)
+
+    def get_obs_and_alive_status_of_agent_name(self, name: str):
+        assert name in self.names, f"`{name}` is not recognized."
+        handle = self._name2handle[name]
+        return self._compute_obs(handle), self.env.get_alive(handle)
+
+    def set_actions(self, handle: ctypes.c_int32, actions: np.ndarray):
+        self.env.set_action(handle, actions)
+
+    def engine_step(self):
+        step_done = self.env.step()
 
     def _calc_obs_shapes(self):
         view_spaces = [self.env.get_view_space(handle) for handle in self.handles]
@@ -167,7 +212,26 @@ class magent_parallel_env(ParallelEnv):
         self.generate_map()
         return self._compute_observations(), {}
 
+    def _compute_obs(self, handle):
+        """
+        Return raw observations of each agent
+        """
+        view, features = self.env.get_observation(handle)
+
+        if self.minimap_mode and not self.extra_features:
+            features = features[:, -2:]
+        if self.minimap_mode or self.extra_features:
+            feat_reshape = np.expand_dims(np.expand_dims(features, 1), 1)
+            feat_img = np.tile(feat_reshape, (1, view.shape[1], view.shape[2], 1))
+            fin_obs = np.concatenate([view, feat_img], axis=-1)
+        else:
+            fin_obs = np.copy(view)
+        return fin_obs
+
     def _compute_observations(self):
+        """
+        Return dict form of observations of each agent
+        """
         observes = [None] * self.max_num_agents
         for handle in self.handles:
             ids = self.env.get_agent_id(handle)
@@ -192,6 +256,9 @@ class magent_parallel_env(ParallelEnv):
         }
 
     def _compute_rewards(self):
+        """
+        Return dict form of rewards of each agent
+        """
         rewards = np.zeros(self.max_num_agents)
         for handle in self.handles:
             ids = self.env.get_agent_id(handle)
@@ -204,6 +271,9 @@ class magent_parallel_env(ParallelEnv):
         }
 
     def _compute_terminates(self, step_done):
+        """
+        Return dict form of termination states of each agent
+        """
         dones = np.ones(self.max_num_agents, dtype=bool)
         if not step_done:
             for i, handle in enumerate(self.handles):
@@ -255,6 +325,10 @@ class magent_parallel_env(ParallelEnv):
         return state
 
     def step(self, all_actions):
+        """
+        Perform one step update to the environment,
+        returns result in dict form of each agent
+        """
         action_list = [-1] * len(self.agents)
         for i, agent in enumerate(self.agents):
             if agent in all_actions:
@@ -288,3 +362,6 @@ class magent_parallel_env(ParallelEnv):
         if self.render_mode == "human":
             self.render()
         return observations, rewards, terminations, truncations, infos
+
+    def generate_map(self):
+        raise NotImplementedError("Should be implemented by subclasses.")
