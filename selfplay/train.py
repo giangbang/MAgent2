@@ -49,6 +49,8 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "battle_v4"
     """the id of the environment"""
+    map_size: int = 45
+    """map size of magent, lower mapsize has lower number of agents"""
     total_timesteps: int = 50000
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
@@ -76,22 +78,24 @@ class Args:
     train_frequency: int = 1
     """the frequency of training"""
     random_opponent: bool = False
-    """training against other dqn agents or random agents"""
+    """training against other dqn agents or random agents (randomness only apply for `red` team, or `deer`)"""
     sum_reward: bool = False
     """Training with reward sum of all agent in blueteam, for debuging purpose"""
     video_frequency: int = 10_000
     """Frequency for logging video training"""
 
 
-def make_env(env_id, seed, render=False):
+def make_env(env_id, seed, render=False, **kwargs):
     def thunk():
         import importlib
 
         importlib.import_module(f"magent2.environments.{env_id}")
         if render:
-            env = eval(f"magent2.environments.{env_id}").env(render_mode="rgb_array")
+            env = eval(f"magent2.environments.{env_id}").env(
+                **kwargs, render_mode="rgb_array"
+            )
         else:
-            env = eval(f"magent2.environments.{env_id}").env()
+            env = eval(f"magent2.environments.{env_id}").env(**kwargs)
 
         return env
 
@@ -171,7 +175,7 @@ if __name__ == "__main__":
     import magent2.environments.magent_env
 
     envs: magent2.environments.magent_env.magent_parallel_env = make_env(
-        args.env_id, args.seed
+        args.env_id, args.seed, map_size=args.map_size
     )()
     vis_env = make_env(args.env_id, args.seed, render=True)()
     env_name = "_".join(args.env_id.split("_")[:-1])
@@ -326,7 +330,7 @@ if __name__ == "__main__":
 
             # update target network
             if global_step % args.target_network_frequency == 0:
-                for handle in specs[env_name]["agent_groups"]:
+                for handle in target_networks.keys():
                     target_network, q_network = (
                         target_networks[handle],
                         q_networks[handle],
