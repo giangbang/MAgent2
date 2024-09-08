@@ -1,3 +1,4 @@
+import copy
 import ctypes
 import numpy as np
 from typing import List
@@ -32,17 +33,20 @@ class magent_parallel_env(ParallelEnv):
         minimap_mode: bool,
         extra_features: bool,
         render_mode=None,
+        return_handle_id: int = 0,
     ):
         self.map_size = map_size
         self.max_cycles = max_cycles
         self.minimap_mode = minimap_mode
         self.extra_features = extra_features
         self.env = env
+        self.return_handle_id = return_handle_id
 
         # save agent names, such as `blue`, `red`, `deer`, `tiger`, etc
         self.names = names
         self.handles = active_handles
         self._all_handles = self.env.get_handles()
+        assert len(self._all_handles) < 3, "not support"
         env.reset()
         self.generate_map()
         self.team_sizes = [
@@ -90,7 +94,13 @@ class magent_parallel_env(ParallelEnv):
         }
 
         self._name2handle = {n: h for n, h in zip(names, self._all_handles)}
-        self._handle2name = {h: n for h, n in zip(names, self._all_handles)}
+        self._handle2name = {h: n for n, h in zip(names, self._all_handles)}
+
+        # if name == "blue", then you control the blue team
+        self.name_return = self._handle2name[self._all_handles[return_handle_id]]
+
+        assert len(self.team_sizes) == 2, "support two teams, not battle field"
+        self.max_team_size = copy.deepcopy(self.team_sizes)
 
         self._zero_obs = {
             agent: np.zeros_like(self.observation_space_of_agent(agent).low)
@@ -143,17 +153,6 @@ class magent_parallel_env(ParallelEnv):
             _, seed = seeding.np_random()
         self.env.set_seed(seed)
 
-    def get_obs_and_alive_status_of_agent_name(self, name: str):
-        assert name in self.names, f"`{name}` is not recognized."
-        handle = self._name2handle[name]
-        return self._compute_obs(handle), self.env.get_alive(handle)
-
-    def set_actions(self, handle: ctypes.c_int32, actions: np.ndarray):
-        self.env.set_action(handle, actions)
-
-    def engine_step(self):
-        step_done = self.env.step()
-
     def _calc_obs_shapes(self):
         view_spaces = [self.env.get_view_space(handle) for handle in self.handles]
         feature_spaces = [self.env.get_feature_space(handle) for handle in self.handles]
@@ -202,7 +201,7 @@ class magent_parallel_env(ParallelEnv):
             self._renderer.close()
             self._renderer = None
 
-    def reset(self, seed=None, return_info=False, options=None):
+    def old_reset(self, seed=None, return_info=False, options=None):
         if seed is not None:
             self.seed(seed=seed)
         self.agents = self.possible_agents[:]
@@ -211,22 +210,6 @@ class magent_parallel_env(ParallelEnv):
         self.team_sizes = [self.env.get_num(handle) for handle in self.handles]
         self.generate_map()
         return self._compute_observations(), {}
-
-    def _compute_obs(self, handle):
-        """
-        Return raw observations of each agent
-        """
-        view, features = self.env.get_observation(handle)
-
-        if self.minimap_mode and not self.extra_features:
-            features = features[:, -2:]
-        if self.minimap_mode or self.extra_features:
-            feat_reshape = np.expand_dims(np.expand_dims(features, 1), 1)
-            feat_img = np.tile(feat_reshape, (1, view.shape[1], view.shape[2], 1))
-            fin_obs = np.concatenate([view, feat_img], axis=-1)
-        else:
-            fin_obs = np.copy(view)
-        return fin_obs
 
     def _compute_observations(self):
         """
@@ -324,7 +307,41 @@ class magent_parallel_env(ParallelEnv):
                 state[pos_x, pos_y, 1 + len(self.team_sizes) * 2 :] = state_features
         return state
 
-    def step(self, all_actions):
+    def step(self, actions: np.ndarray):
+        assert len(actions) == self.max_team_size[self.return_handle_id]
+        start_point = 0
+        for i in range(len(self.handles)):
+            size = self.team_sizes[i]
+            self.env.set_action(
+                self.handles[i], actions[start_point : (start_point + size)]
+            )
+            start_point += size
+        self.frames += 1
+        step_done = self.env.step()
+
+        obses = self._obses = getattr(
+            self,
+            "_obses",
+            np.empty(
+                self.observation_spaces[
+                    self._handle2name[self._all_handles[self.return_handle_id]]
+                ]
+            ),
+        )
+
+        done = self._done = getattr(
+            self, "_done", np.ones(shape=(self.max_num_agents), dtype=bool)
+        )
+
+        if step_done:
+            done = True
+        else:
+            for i, handle in enumerate(self.handles):
+                ids = self.env.get_agent_id(handle)
+                done[ids] = ~self.env.get_alive(handle)
+                self.team_sizes[i] = len(ids) - np.array(done[ids]).sum()
+
+    def old_step(self, all_actions: dict):
         """
         Perform one step update to the environment,
         returns result in dict form of each agent

@@ -224,7 +224,7 @@ if __name__ == "__main__":
     current_rewards_of_blueteam = 0
 
     # TRY NOT TO MODIFY: start the game
-    envs.reset(seed=args.seed)
+    envs.old_reset(seed=args.seed)
     for global_step in range(args.total_timesteps):
         epsilon = linear_schedule(
             args.start_e,
@@ -257,7 +257,7 @@ if __name__ == "__main__":
             _actions[agent] = actions[0]
 
         # TRY NOT TO MODIFY: execute the game and log data.
-        next_obs, rewards, terminations, truncations, infos = envs.step(_actions)
+        next_obs, rewards, terminations, truncations, infos = envs.old_step(_actions)
 
         if args.sum_reward:
             sum_rw = 0
@@ -360,7 +360,7 @@ if __name__ == "__main__":
         # this agents list already handle termination and truncation
         # as dead agents and truncated one are excluded from this list
         if len(envs.agents) == 0:
-            obs, _ = envs.reset()
+            obs, _ = envs.old_reset()
             print(f"A new episode restarts at step {global_step+1}...")
             if args.random_opponent:
                 print("Episode reward of blueteam:", current_rewards_of_blueteam)
