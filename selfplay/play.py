@@ -13,8 +13,9 @@ def gameplay_video(
     os.makedirs(vid_dir, exist_ok=True)
 
     # play agains selfplay agents
-    vis_env.reset(seed + 1)
+    vis_env.old_reset(seed + 1)
     print("Number of agents:", len(vis_env.agents))
+    print("Agent names:", vis_env.names)
     fps = 30
     frames = []
 
@@ -28,7 +29,8 @@ def gameplay_video(
             agent_handle = agent.split("_")[0]
 
             if random.random() < 0.05:  # 5% random actions, similar to atari
-                action = vis_env.action_space_of_agent(agent).sample()
+                name = agent.split("_")[0]
+                action = vis_env.action_spaces[name].sample()
             else:
                 with torch.no_grad():
                     q_value = q_networks[agent_handle](
@@ -38,7 +40,7 @@ def gameplay_video(
                 action = torch.argmax(q_value, dim=1).cpu().numpy()[0]
 
             actions[agent] = action
-        vis_env.step(actions)
+        vis_env.old_step(actions)
 
     height, width, _ = frames[0].shape
 
@@ -59,7 +61,7 @@ def gameplay_video(
     out.release()
 
     # play agains random agents
-    vis_env.reset()
+    vis_env.old_reset()
     frames = [vis_env.render()]
 
     while len(vis_env.agents) > 0:
@@ -83,7 +85,8 @@ def gameplay_video(
             if (
                 random_agent or random.random() < 0.05
             ):  # 5% random actions, similar to atari
-                action = vis_env.action_space_of_agent(agent).sample()
+                name = agent.split("_")[0]
+                action = vis_env.action_spaces[name].sample()
             else:
                 with torch.no_grad():
                     q_value = q_networks[agent_handle](
@@ -93,7 +96,7 @@ def gameplay_video(
                 action = torch.argmax(q_value, dim=1).cpu().numpy()[0]
 
             actions[agent] = action
-        vis_env.step(actions)
+        vis_env.old_step(actions)
 
     height, width, _ = frames[0].shape
 

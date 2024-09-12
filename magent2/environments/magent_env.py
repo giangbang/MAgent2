@@ -33,7 +33,7 @@ class magent_parallel_env(ParallelEnv):
         minimap_mode: bool,
         extra_features: bool,
         render_mode=None,
-        return_handle_id: int = 0,
+        return_handle_id: int = 1,
     ):
         assert len(names) == len(active_handles)
 
@@ -133,6 +133,8 @@ class magent_parallel_env(ParallelEnv):
 
         self.agent_observation_space = self.observation_spaces[self.agent_name]
         self.enemy_observation_space = self.observation_spaces[self.enemy_name]
+
+        assert self.names[return_handle_id] in ["blue", "tiger"]
 
     def seed(self, seed=None):
         if seed is None:
@@ -242,7 +244,7 @@ class magent_parallel_env(ParallelEnv):
         ids = self.env.get_agent_id(self.agents_handle)
 
         if self.agents_handle_id > 0:
-            ids -= np.sum(self.max_team_size[: self.agents_handle_id])
+            ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
 
         view, features = self.env.get_observation(self.agents_handle)
         if self.minimap_mode and not self.extra_features:
@@ -257,26 +259,27 @@ class magent_parallel_env(ParallelEnv):
         return return_obses
 
     def get_rewards(self):
-        return_rewards = np.zeros((self.n_agents, 1), dtype=np.float32)
+        return_rewards = np.zeros((self.n_agents,), dtype=np.float32)
         ids = self.env.get_agent_id(self.agents_handle)
 
         if self.agents_handle_id > 0:
-            ids -= np.sum(self.max_team_size[: self.agents_handle_id])
-
+            ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
         return_rewards[ids] = self.env.get_reward(self.agents_handle)
-        return return_rewards
+        return return_rewards[..., None]
 
     def get_dones(self, step_done: bool):
-        return_dones = np.empty((self.n_agents, 1), dtype=bool)
+        return_dones = np.empty((self.n_agents,), dtype=bool)
         if step_done:
             return_dones[:] = 1
         else:
             ids = self.env.get_agent_id(self.agents_handle)
             if self.agents_handle_id > 0:
-                ids -= np.sum(self.max_team_size[: self.agents_handle_id])
+                ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(
+                    np.int32
+                )
 
             return_dones[ids] = ~self.env.get_alive(self.agents_handle)
-        return return_dones
+        return return_dones[..., None]
 
     def _compute_rewards(self):
         """
@@ -348,12 +351,16 @@ class magent_parallel_env(ParallelEnv):
         return state
 
     def get_enemy_random_actions(self):
-        n_enemy_alive: int = np.sum(~self.env.get_alive(self.enemy_handle))
+        n_enemy_alive = np.sum(self.env.get_alive(self.enemy_handle))
 
-        action_dim_enemy: int = self.enemy_action_space.n + 1
-        assert isinstance(action_dim_enemy, int), "wtf"
+        action_dim_enemy = int(self.enemy_action_space.n)
+        # assert isinstance(
+        #     action_dim_enemy, int
+        # ), f"{self.enemy_action_space.n} {type(self.enemy_action_space.n)}"
 
-        return_action = np.random.randint(0, action_dim_enemy, size=(n_enemy_alive, 1))
+        return_action = np.random.randint(
+            0, action_dim_enemy, size=(n_enemy_alive,), dtype=np.int32
+        )
         return return_action
 
     def step(self, actions: np.ndarray):
@@ -362,7 +369,8 @@ class magent_parallel_env(ParallelEnv):
         # set the action of the controlled agents
         ids = self.env.get_agent_id(self.agents_handle)
         if self.agents_handle_id > 0:
-            ids -= np.sum(self.max_team_size[: self.agents_handle_id - 1])
+            ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
+
         self.env.set_action(self.agents_handle, actions[ids])
 
         # set action of the enemy team (not controlled by training agents)

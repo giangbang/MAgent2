@@ -225,54 +225,59 @@ if __name__ == "__main__":
 
         current_eps_len += 1
 
-        active_obses = obses[active_agents]
+        active_agents = active_agents.squeeze()
+
+        active_obses = obses[active_agents.squeeze()]
+
         active_obses = torch.Tensor(active_obses).float().permute(0, 3, 1, 2).to(device)
-        print(active_obses.shape)
 
         actions = np.empty(envs.n_agents, dtype=np.int32)
         tmp_action = np.empty((active_agents.sum(), 1))
 
         random_action_sample = np.random.rand(*tmp_action.shape)
-        print("random sample", random_action_sample)
-        print("epsilon", epsilon)
+
         random_action_mask: np.ndarray = random_action_sample < epsilon
 
         random_action_mask = random_action_mask.squeeze()
+        greedy_action_mask = (1 - random_action_mask).astype(bool)
 
         tmp_action[random_action_mask] = np.random.randint(
-            0, envs.agent_action_space.n + 1, size=(random_action_mask.sum(), 1)
+            0, envs.agent_action_space.n, size=(random_action_mask.sum(), 1)
         )
-        if np.sum(~random_action_mask) > 0:
+        if np.sum(greedy_action_mask) > 0:
             with torch.no_grad():
-                q_values = q_networks(active_obses[~random_action_mask])
+                q_values = q_networks(active_obses[greedy_action_mask])
             assert len(q_values.shape) == 2
             greedy_actions = torch.argmax(q_values, dim=1).cpu().numpy()
-            tmp_action[~random_action_mask] = greedy_actions
+            tmp_action[greedy_action_mask[..., None]] = greedy_actions
 
-        print(np.sum(active_agents), active_agents.squeeze().shape, tmp_action.shape)
-        print(active_agents)
         actions[active_agents.squeeze()] = tmp_action.squeeze()
 
         # TRY NOT TO MODIFY: execute the game and log data.
         next_obs, rewards, done, infos = envs.step(actions)
 
-        if infos["truncated"]:
-            done[:] = 0
-
         # TRY NOT TO MODIFY: save data to reply buffer;
-        rbs.add(
+        for o, no, a, r, d in zip(
             obses[active_agents],
             next_obs[active_agents],
             actions[active_agents],
             rewards[active_agents],
             done[active_agents],
-            [{}],
-        )
+        ):
+            rbs.add(
+                o,
+                no,
+                a,
+                r,
+                d,
+                [{}],
+            )
+            # print(np.sum(o), np.sum(no), (r), (a), (d))
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obses = next_obs
-
-        active_agents = ~done
+        current_rewards_of_blueteam += rewards[active_agents].sum()
+        active_agents = done == False
 
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
@@ -282,14 +287,19 @@ if __name__ == "__main__":
                     target_max, _ = target_networks(
                         data.next_observations.permute(0, 3, 1, 2)
                     ).max(dim=1)
+                    # print(data.actions)
                     td_target = data.rewards.flatten() + args.gamma * target_max * (
                         1 - data.dones.flatten()
                     )
+                    # print(td_target)
+                # print(q_networks(data.observations.permute(0, 3, 1, 2)).shape)
                 old_val = (
                     q_networks(data.observations.permute(0, 3, 1, 2))
                     .gather(1, data.actions)
                     .squeeze()
                 )
+                # print(td_target.shape, old_val.shape)
+                # print(old_val)
                 loss = F.mse_loss(td_target, old_val)
 
                 # optimize the model
@@ -326,19 +336,18 @@ if __name__ == "__main__":
         if (global_step + 1) % args.video_frequency == 0:
             print("Logging video...")
             model_path = f"runs/{run_name}/{args.exp_name}"
+            q_networkds_dict = {name: q_networks for name in vis_env.names}
             gameplay_video(
                 vis_env=vis_env,
                 env_name=env_name,
                 seed=args.seed,
-                q_networks=q_networks,
+                q_networks=q_networkds_dict,
                 device=device,
                 vid_dir=model_path,
                 update_steps=global_step,
             )
 
-        # this agents list already handle termination and truncation
-        # as dead agents and truncated one are excluded from this list
-        if np.all(done):
+        if np.all(done) or infos["truncated"]:
             obses, _ = envs.reset()
             print(f"A new episode restarts at step {global_step+1}...")
             if args.random_opponent:
@@ -360,11 +369,12 @@ if __name__ == "__main__":
     writer.close()
 
     # visualize end results
+    q_networkds_dict = {name: q_networks for name in vis_env.names}
     gameplay_video(
         vis_env=vis_env,
         env_name=env_name,
         seed=args.seed,
-        q_networks=q_networks,
+        q_networks=q_networkds_dict,
         device=device,
         vid_dir=model_path,
     )
