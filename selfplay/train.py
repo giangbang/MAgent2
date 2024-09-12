@@ -241,8 +241,8 @@ if __name__ == "__main__":
     for group, target_network in target_networks.items():
         target_network.load_state_dict(q_networks[group].state_dict())
 
-    if args.share_weight_all:
-        args.buffer_size = args.buffer_size * envs.n_agents
+    # if args.share_weight_all: # this not work
+    #     args.buffer_size = args.buffer_size * envs.n_agents
 
     rbs = {
         envs.names[0]: ReplayBuffer(
