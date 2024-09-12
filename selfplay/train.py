@@ -83,6 +83,8 @@ class Args:
     """Training with reward sum of all agent in blueteam, for debuging purpose"""
     video_frequency: int = 10_000
     """Frequency for logging video training"""
+    share_weight_all: bool = False
+    """share weights between all handles (both friend and enemy), this is truly a selfplay setting"""
 
 
 def make_env(env_id, seed, render=False, **kwargs):
@@ -143,6 +145,13 @@ if __name__ == "__main__":
     args = tyro.cli(Args)
     assert args.num_envs == 1, "vectorized envs are not supported at the moment"
     print(args)
+    if args.share_weight_all:
+        print("Share weight between both teams, true selfplay settings!")
+        assert args.env_id not in [
+            "tiger_deer_v3",
+            "adversarial_pursuit_v4",
+            "combined_arms_v6",
+        ], "not support heterogeneous env"
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
@@ -180,39 +189,84 @@ if __name__ == "__main__":
     vis_env = make_env(args.env_id, args.seed, render=True)()
     env_name = "_".join(args.env_id.split("_")[:-1])
 
-    from magent2.specs import specs
-
     q_networks = {
-        group: QNetwork(
-            specs[env_name]["observation_shape"][group],
-            specs[env_name]["action_shape"][group],
+        envs.names[0]: QNetwork(
+            envs.observation_spaces[envs.names[0]].shape,
+            envs.action_spaces[envs.names[0]].n,
         ).to(device)
-        for group in specs[env_name]["agent_groups"]
     }
+
+    if args.share_weight_all:
+        q_networks = {name: q_networks[envs.names[0]] for name in envs.names}
+    else:
+        q_networks = {
+            name: QNetwork(
+                envs.observation_spaces[envs.names[0]].shape,
+                envs.action_spaces[envs.names[0]].n,
+            ).to(device)
+            for name in envs.names
+        }
+
     optimizers = {
-        group: optim.Adam(q_network.parameters(), lr=args.learning_rate)
-        for group, q_network in q_networks.items()
+        envs.names[0]: optim.Adam(
+            q_networks[envs.names[0]].parameters(), lr=args.learning_rate
+        )
     }
+    if args.share_weight_all:
+        optimizers = {name: optimizers[envs.names[0]] for name in envs.names}
+    else:
+        optimizers = {
+            name: optim.Adam(q_network.parameters(), lr=args.learning_rate)
+            for name, q_network in q_networks.items()
+        }
+
     target_networks = {
-        group: QNetwork(
-            specs[env_name]["observation_shape"][group],
-            specs[env_name]["action_shape"][group],
+        envs.names[0]: QNetwork(
+            envs.observation_spaces[envs.names[0]].shape,
+            envs.action_spaces[envs.names[0]].n,
         ).to(device)
-        for group in specs[env_name]["agent_groups"]
     }
+
+    if args.share_weight_all:
+        target_networks = {name: target_networks[envs.names[0]] for name in envs.names}
+    else:
+        target_networks = {
+            name: QNetwork(
+                envs.observation_spaces[envs.names[0]].shape,
+                envs.action_spaces[envs.names[0]].n,
+            ).to(device)
+            for name in envs.names
+        }
+
     for group, target_network in target_networks.items():
         target_network.load_state_dict(q_networks[group].state_dict())
 
+    if args.share_weight_all:
+        args.buffer_size = args.buffer_size * envs.n_agents
+
     rbs = {
-        group: ReplayBuffer(
+        envs.names[0]: ReplayBuffer(
             args.buffer_size,
-            specs[env_name]["observation_shape"][group],
+            envs.observation_spaces[envs.names[0]].shape,
             1,  # discrete action
             device,
             handle_timeout_termination=False,
         )
-        for group in specs[env_name]["agent_groups"]
-    }  # each group corresponds to a seperate replay buffer, they share experience within each group
+    }
+
+    if args.share_weight_all:
+        rbs = {name: rbs[envs.names[0]] for name in envs.names}
+    else:
+        rbs = {
+            name: ReplayBuffer(
+                args.buffer_size,
+                envs.observation_spaces[envs.names[0]].shape,
+                1,  # discrete action
+                device,
+                handle_timeout_termination=False,
+            )
+            for name in envs.names
+        }  # each group corresponds to a seperate replay buffer, they share experience within each group
     current_eps_len = 0
 
     opponent_groups = []
@@ -224,7 +278,7 @@ if __name__ == "__main__":
     current_rewards_of_blueteam = 0
 
     # TRY NOT TO MODIFY: start the game
-    envs.old_reset(seed=args.seed)
+    envs.magent_reset(seed=args.seed)
     for global_step in range(args.total_timesteps):
         epsilon = linear_schedule(
             args.start_e,
@@ -241,9 +295,7 @@ if __name__ == "__main__":
             if random.random() < epsilon or (
                 args.random_opponent and group in opponent_groups
             ):
-                actions = np.random.randint(
-                    0, specs[env_name]["action_shape"][group], size=(1,)
-                )
+                actions = np.random.randint(0, envs.action_spaces[group].n, size=(1,))
             else:
                 obs_tensor = (
                     torch.Tensor(obs[agent]).float().permute(2, 0, 1).to(device)
@@ -257,7 +309,7 @@ if __name__ == "__main__":
             _actions[agent] = actions[0]
 
         # TRY NOT TO MODIFY: execute the game and log data.
-        next_obs, rewards, terminations, truncations, infos = envs.old_step(_actions)
+        next_obs, rewards, terminations, truncations, infos = envs.magent_step(_actions)
 
         if args.sum_reward:
             sum_rw = 0
@@ -360,7 +412,7 @@ if __name__ == "__main__":
         # this agents list already handle termination and truncation
         # as dead agents and truncated one are excluded from this list
         if len(envs.agents) == 0:
-            obs, _ = envs.old_reset()
+            obs, _ = envs.magent_reset()
             print(f"A new episode restarts at step {global_step+1}...")
             if args.random_opponent:
                 print("Episode reward of blueteam:", current_rewards_of_blueteam)

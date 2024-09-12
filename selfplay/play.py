@@ -13,7 +13,7 @@ def gameplay_video(
     os.makedirs(vid_dir, exist_ok=True)
 
     # play agains selfplay agents
-    vis_env.old_reset(seed + 1)
+    vis_env.magent_reset(seed + 1)
     print("Number of agents:", len(vis_env.agents))
     print("Agent names:", vis_env.names)
     fps = 30
@@ -40,7 +40,7 @@ def gameplay_video(
                 action = torch.argmax(q_value, dim=1).cpu().numpy()[0]
 
             actions[agent] = action
-        vis_env.old_step(actions)
+        vis_env.magent_step(actions)
 
     height, width, _ = frames[0].shape
 
@@ -61,7 +61,7 @@ def gameplay_video(
     out.release()
 
     # play agains random agents
-    vis_env.old_reset()
+    vis_env.magent_reset()
     frames = [vis_env.render()]
 
     while len(vis_env.agents) > 0:
@@ -96,7 +96,7 @@ def gameplay_video(
                 action = torch.argmax(q_value, dim=1).cpu().numpy()[0]
 
             actions[agent] = action
-        vis_env.old_step(actions)
+        vis_env.magent_step(actions)
 
     height, width, _ = frames[0].shape
 

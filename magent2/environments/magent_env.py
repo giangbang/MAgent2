@@ -189,7 +189,8 @@ class magent_parallel_env(ParallelEnv):
             self._renderer.close()
             self._renderer = None
 
-    def old_reset(self, seed=None, return_info=False, options=None):
+    def magent_reset(self, seed=None, return_info=False, options=None):
+        """reset function from magent2"""
         if seed is not None:
             self.seed(seed=seed)
         self.agents = self.possible_agents[:]
@@ -199,7 +200,8 @@ class magent_parallel_env(ParallelEnv):
         self.generate_map()
         return self._compute_observations(), {}
 
-    def reset(self, seed=None):
+    def gym_reset(self, seed=None):
+        """gym API reset"""
         if seed is not None:
             self.seed(seed=seed)
         self.env.reset()
@@ -363,11 +365,13 @@ class magent_parallel_env(ParallelEnv):
         )
         return return_action
 
-    def step(self, actions: np.ndarray):
-        assert len(actions) == self.max_team_size[self.agents_handle_id]
+    def gym_step(self, actions: np.ndarray):
+        """Gym API step"""
+        assert len(actions) == self.n_agents
 
         # set the action of the controlled agents
         ids = self.env.get_agent_id(self.agents_handle)
+        print(ids)
         if self.agents_handle_id > 0:
             ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
 
@@ -393,8 +397,9 @@ class magent_parallel_env(ParallelEnv):
             info["TimeLimit.truncated"] = True  # stable-baselines3
         return next_obses, rewards, dones, info
 
-    def old_step(self, all_actions: dict):
+    def magent_step(self, all_actions: dict):
         """
+        Step function from magent2
         Perform one step update to the environment,
         returns result in dict form of each agent
         """
