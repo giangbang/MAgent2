@@ -53,7 +53,7 @@ class Args:
     """map size of magent, lower mapsize has lower number of agents"""
     total_timesteps: int = 50000
     """total timesteps of the experiments"""
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments, always fixed with magent"""
@@ -83,6 +83,8 @@ class Args:
     """Training with reward sum of all agent in blueteam, for debuging purpose"""
     video_frequency: int = 10_000
     """Frequency for logging video training"""
+    share_weight_all: bool = False
+    """share weights between all handles (both friend and enemy), this is truly a selfplay setting"""
 
 
 def make_env(env_id, seed, render=False, **kwargs):
@@ -143,6 +145,15 @@ if __name__ == "__main__":
     args = tyro.cli(Args)
     assert args.num_envs == 1, "vectorized envs are not supported at the moment"
     print(args)
+    if args.share_weight_all:
+        print("Share weight between both teams, true selfplay settings!")
+        assert args.env_id not in [
+            "tiger_deer_v3",
+            "adversarial_pursuit_v4",
+            "combined_arms_v6",
+        ], "not support heterogeneous env"
+        # assert not args.random_opponent, "if use random opponent, do not share weight"
+
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
@@ -203,10 +214,6 @@ if __name__ == "__main__":
         handle_timeout_termination=False,
     )
     current_eps_len = 0
-
-    opponent_groups = []
-    if args.random_opponent:  # red is enemy, act random
-        opponent_groups = ["prey", "red", "redmelee", "redranged", "deer"]
 
     env = envs.env
     start_time = time.time()

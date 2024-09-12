@@ -53,7 +53,7 @@ class Args:
     """map size of magent, lower mapsize has lower number of agents"""
     total_timesteps: int = 50000
     """total timesteps of the experiments"""
-    learning_rate: float = 2.5e-4
+    learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments, always fixed with magent"""
@@ -152,6 +152,7 @@ if __name__ == "__main__":
             "adversarial_pursuit_v4",
             "combined_arms_v6",
         ], "not support heterogeneous env"
+        # assert not args.random_opponent, "if use random opponent, do not share weight"
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
@@ -295,6 +296,7 @@ if __name__ == "__main__":
             if random.random() < epsilon or (
                 args.random_opponent and group in opponent_groups
             ):
+                # print(group in opponent_groups)
                 actions = np.random.randint(0, envs.action_spaces[group].n, size=(1,))
             else:
                 obs_tensor = (
@@ -322,6 +324,8 @@ if __name__ == "__main__":
         # TRY NOT TO MODIFY: save data to reply buffer;
         for agent in obs.keys():
             group = agent.split("_")[0]
+            if args.random_opponent and group in opponent_groups:
+                continue
             r = np.array((rewards[agent],))
             if args.sum_reward:
                 r = sum_rw
@@ -343,6 +347,8 @@ if __name__ == "__main__":
         if global_step > args.learning_starts:
             if global_step % args.train_frequency == 0:
                 for handle, rb in rbs.items():
+                    if args.random_opponent and handle in opponent_groups:
+                        continue
                     data = rb.sample(args.batch_size)
                     with torch.no_grad():
                         target_max, _ = target_networks[handle](
