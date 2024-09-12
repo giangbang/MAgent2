@@ -1,3 +1,4 @@
+import gymnasium
 import copy
 import ctypes
 import numpy as np
@@ -89,7 +90,7 @@ class magent_parallel_env(ParallelEnv):
         self.action_spaces = {
             name: space for name, space in zip(names, action_spaces_list)
         }
-        self.observation_spaces = {
+        self.observation_spaces: dict[str, gymnasium.spaces.Space] = {
             name: space for name, space in zip(names, observation_space_list)
         }
 
@@ -97,7 +98,7 @@ class magent_parallel_env(ParallelEnv):
         self._handle2name = {h: n for n, h in zip(names, self._all_handles)}
 
         # if name == "blue", then you control the blue team
-        self.name_return = self._handle2name[self._all_handles[return_handle_id]]
+        self.name_return: str = self._handle2name[self._all_handles[return_handle_id]]
 
         assert len(self.team_sizes) == 2, "support two teams, not battle field"
         self.max_team_size = copy.deepcopy(self.team_sizes)
@@ -307,39 +308,62 @@ class magent_parallel_env(ParallelEnv):
                 state[pos_x, pos_y, 1 + len(self.team_sizes) * 2 :] = state_features
         return state
 
+    def bot_act(self, handle, n_samples: int):
+        name = self._handle2name[handle]
+        action_n = self.action_space_of_agent_name(name).n
+        actions = np.random.randint(0, action_n, size=(n_samples,))
+        return actions
+
     def step(self, actions: np.ndarray):
         assert len(actions) == self.max_team_size[self.return_handle_id]
-        start_point = 0
         for i in range(len(self.handles)):
-            size = self.team_sizes[i]
-            self.env.set_action(
-                self.handles[i], actions[start_point : (start_point + size)]
-            )
-            start_point += size
+            if i == self.return_handle_id:
+                self.env.set_action(self.handles[i], actions)
+            else:
+                size = self.team_sizes[i]
+                a = self.bot_act(self.handles[i], size)
+                self.env.set_action(self.handles[i], a)
+
         self.frames += 1
         step_done = self.env.step()
+        self.env.clear_dead()
 
-        obses = self._obses = getattr(
-            self,
-            "_obses",
-            np.empty(
-                self.observation_spaces[
-                    self._handle2name[self._all_handles[self.return_handle_id]]
-                ]
+        obses = np.zeros(
+            (
+                self.max_team_size[self.return_handle_id],
+                *self.observation_space_of_agent_name(self.name_return).shape,
             ),
+            dtype=np.float32,
         )
+        handle = self._all_handles[self.return_handle_id]
+        ids = self.env.get_agent_id(handle)
+        view, features = self.env.get_observation(handle)
 
-        done = self._done = getattr(
-            self, "_done", np.ones(shape=(self.max_num_agents), dtype=bool)
+        if self.minimap_mode and not self.extra_features:
+            features = features[:, -2:]
+        if self.minimap_mode or self.extra_features:
+            feat_reshape = np.expand_dims(np.expand_dims(features, 1), 1)
+            feat_img = np.tile(feat_reshape, (1, view.shape[1], view.shape[2], 1))
+            fin_obs = np.concatenate([view, feat_img], axis=-1)
+        else:
+            fin_obs = np.copy(view)
+        for id, obs in zip(ids, fin_obs):
+            obses[id] = obs
+
+        reward = np.zeros(
+            (self.max_team_size[self.return_handle_id], 1), dtype=np.float32
         )
+        reward[ids] = self.env.get_reward(handle)
+
+        done = np.zeros((self.max_team_size[self.return_handle_id], 1), dtype=bool)
 
         if step_done:
-            done = True
+            done[:] = 1
         else:
-            for i, handle in enumerate(self.handles):
-                ids = self.env.get_agent_id(handle)
-                done[ids] = ~self.env.get_alive(handle)
-                self.team_sizes[i] = len(ids) - np.array(done[ids]).sum()
+            done[ids] = ~self.env.get_alive(handle)
+            self.team_sizes[i] = len(ids) - np.array(done[ids]).sum()
+
+        return obses, reward, done, {}
 
     def old_step(self, all_actions: dict):
         """
