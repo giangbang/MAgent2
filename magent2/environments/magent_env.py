@@ -266,6 +266,7 @@ class magent_parallel_env(ParallelEnv):
 
         if self.agents_handle_id > 0:
             ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
+
         return_rewards[ids] = self.env.get_reward(self.agents_handle)
         return return_rewards[..., None]
 
@@ -371,7 +372,7 @@ class magent_parallel_env(ParallelEnv):
 
         # set the action of the controlled agents
         ids = self.env.get_agent_id(self.agents_handle)
-        print(ids)
+        # print(ids)
         if self.agents_handle_id > 0:
             ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
 

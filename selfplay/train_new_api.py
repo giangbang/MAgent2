@@ -220,8 +220,8 @@ if __name__ == "__main__":
     current_rewards_of_blueteam = 0
 
     # TRY NOT TO MODIFY: start the game
-    obses, _ = envs.reset(seed=args.seed)
-    active_agents = np.ones(envs.n_agents, dtype=bool)
+    obses, _ = envs.gym_reset(seed=args.seed)
+    active_agents = np.ones(envs.n_agents, bool)
     for global_step in range(args.total_timesteps):
         epsilon = linear_schedule(
             args.start_e,
@@ -232,58 +232,52 @@ if __name__ == "__main__":
 
         current_eps_len += 1
 
-        active_agents = active_agents.squeeze()
-
-        active_obses = obses[active_agents.squeeze()]
-
-        active_obses = torch.Tensor(active_obses).float().permute(0, 3, 1, 2).to(device)
+        tensor_obses = torch.Tensor(obses).float().permute(0, 3, 1, 2).to(device)
 
         actions = np.empty(envs.n_agents, dtype=np.int32)
-        tmp_action = np.empty((active_agents.sum(), 1))
+        # print("action.shape", actions.shape)
 
-        random_action_sample = np.random.rand(*tmp_action.shape)
+        random_action_sample = np.random.rand(*actions.shape)
 
-        random_action_mask: np.ndarray = random_action_sample < epsilon
+        random_action_mask = random_action_sample < epsilon
+        # print("random actions mask", random_action_mask.shape)
 
-        random_action_mask = random_action_mask.squeeze()
-        greedy_action_mask = (1 - random_action_mask).astype(bool)
+        random_action_mask = random_action_mask
+        greedy_action_mask = ~random_action_mask
 
-        tmp_action[random_action_mask] = np.random.randint(
-            0, envs.agent_action_space.n, size=(random_action_mask.sum(), 1)
+        actions[random_action_mask] = np.random.randint(
+            0,
+            envs.agent_action_space.n,
+            size=(np.sum(random_action_mask),),
         )
         if np.sum(greedy_action_mask) > 0:
             with torch.no_grad():
-                q_values = q_networks(active_obses[greedy_action_mask])
+                q_values = q_networks(tensor_obses[greedy_action_mask])
             assert len(q_values.shape) == 2
             greedy_actions = torch.argmax(q_values, dim=1).cpu().numpy()
-            tmp_action[greedy_action_mask[..., None]] = greedy_actions
-
-        actions[active_agents.squeeze()] = tmp_action.squeeze()
+            actions[greedy_action_mask] = greedy_actions
 
         # TRY NOT TO MODIFY: execute the game and log data.
-        next_obs, rewards, done, infos = envs.step(actions)
+        next_obs, rewards, done, infos = envs.gym_step(actions)
 
         # TRY NOT TO MODIFY: save data to reply buffer;
-        for o, no, a, r, d in zip(
-            obses[active_agents],
-            next_obs[active_agents],
-            actions[active_agents],
-            rewards[active_agents],
-            done[active_agents],
+        for o, no, a, r, d, active in zip(
+            obses, next_obs, actions, rewards, done, active_agents
         ):
-            rbs.add(
-                o,
-                no,
-                a,
-                r,
-                d,
-                [{}],
-            )
+            if active:
+                rbs.add(
+                    o,
+                    no,
+                    a,
+                    r,
+                    d,
+                    [{}],
+                )
             # print(np.sum(o), np.sum(no), (r), (a), (d))
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
         obses = next_obs
-        current_rewards_of_blueteam += rewards[active_agents].sum()
+        current_rewards_of_blueteam += rewards.sum()
         active_agents = done == False
 
         # ALGO LOGIC: training.
@@ -355,10 +349,10 @@ if __name__ == "__main__":
             )
 
         if np.all(done) or infos["truncated"]:
-            obses, _ = envs.reset()
+            obses, _ = envs.gym_reset()
+            active_agents = np.ones(envs.n_agents, bool)
             print(f"A new episode restarts at step {global_step+1}...")
-            if args.random_opponent:
-                print("Episode reward of blueteam:", current_rewards_of_blueteam)
+            print("Episode reward of blueteam:", current_rewards_of_blueteam)
 
             writer.add_scalar("charts/episodic_length", current_eps_len, global_step)
             current_eps_len = 0
@@ -367,8 +361,7 @@ if __name__ == "__main__":
     model_path = f"runs/{run_name}/{args.exp_name}"
     if args.save_model:
         os.makedirs(model_path, exist_ok=True)
-        for handle, q_network in q_networks.items():
-            torch.save(q_network.state_dict(), os.path.join(model_path, handle + ".pt"))
+        torch.save(q_networks.state_dict(), os.path.join(model_path, "model.pt"))
         print(f"model saved to {model_path}")
 
     envs.close()
