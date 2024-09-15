@@ -271,7 +271,7 @@ class magent_parallel_env(ParallelEnv):
         return return_rewards[..., None]
 
     def get_dones(self, step_done: bool):
-        return_dones = np.empty((self.n_agents,), dtype=bool)
+        return_dones = np.ones((self.n_agents,), dtype=bool)
         if step_done:
             return_dones[:] = 1
         else:
