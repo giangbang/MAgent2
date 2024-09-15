@@ -44,7 +44,7 @@ class magent_parallel_env(ParallelEnv):
         self.env = env
 
         self.agents_handle_id = max(return_handle_id, len(active_handles) - 1)
-        self.enemy_handle_id = max(1 - self.agents_handle_id, len(active_handles) - 1)
+        self.enemy_handle_id = len(active_handles) - 1 - self.agents_handle_id
 
         assert isinstance(self.agents_handle_id, int), self.agents_handle_id
         assert isinstance(self.enemy_handle_id, int), self.enemy_handle_id
@@ -107,9 +107,11 @@ class magent_parallel_env(ParallelEnv):
         # if name == "blue", then you control the blue team
         self.agent_name = self.names[return_handle_id]
         self.n_agents = self.max_team_size[self.agents_handle_id]
+        print("Name of the team you controll", self.agent_name)
 
         self.enemy_name = self.names[self.enemy_handle_id]
         self.n_enemy = self.max_team_size[self.enemy_handle_id]
+        print("Name of the enemy team", self.enemy_name)
 
         assert len(self.team_sizes) == 2, "support two teams, not battle field"
 
@@ -261,7 +263,7 @@ class magent_parallel_env(ParallelEnv):
         return return_obses
 
     def get_rewards(self):
-        return_rewards = np.zeros((self.n_agents,), dtype=np.float32)
+        return_rewards = np.zeros(self.n_agents, dtype=np.float32)
         ids = self.env.get_agent_id(self.agents_handle)
 
         if self.agents_handle_id > 0:
@@ -271,10 +273,8 @@ class magent_parallel_env(ParallelEnv):
         return return_rewards[..., None]
 
     def get_dones(self, step_done: bool):
-        return_dones = np.ones((self.n_agents,), dtype=bool)
-        if step_done:
-            return_dones[:] = 1
-        else:
+        return_dones = np.ones(self.n_agents, dtype=bool)
+        if not step_done:
             ids = self.env.get_agent_id(self.agents_handle)
             if self.agents_handle_id > 0:
                 ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(
