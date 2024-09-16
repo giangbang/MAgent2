@@ -43,7 +43,7 @@ class magent_parallel_env(ParallelEnv):
         self.extra_features = extra_features
         self.env = env
 
-        self.agents_handle_id = max(return_handle_id, len(active_handles) - 1)
+        self.agents_handle_id = return_handle_id
         self.enemy_handle_id = len(active_handles) - 1 - self.agents_handle_id
 
         assert isinstance(self.agents_handle_id, int), self.agents_handle_id
@@ -137,11 +137,17 @@ class magent_parallel_env(ParallelEnv):
         self.enemy_observation_space = self.observation_spaces[self.enemy_name]
 
         assert self.names[return_handle_id] in ["blue", "tiger"]
+        self.set_random_enemy()  # enemy agents act randomly
+
+        self._env_id = "None"  # declare by subclasses
 
     def seed(self, seed=None):
         if seed is None:
             _, seed = seeding.np_random()
         self.env.set_seed(seed)
+
+    def set_random_enemy(self, random=True):
+        self.random_enemy = random
 
     def _calc_obs_shapes(self):
         view_spaces = [self.env.get_view_space(handle) for handle in self.handles]
@@ -379,7 +385,10 @@ class magent_parallel_env(ParallelEnv):
         self.env.set_action(self.agents_handle, actions[ids])
 
         # set action of the enemy team (not controlled by training agents)
-        enemy_actions = self.get_enemy_random_actions()
+        if self.random_enemy:
+            enemy_actions = self.get_enemy_random_actions()
+        else:
+            enemy_actions = self.get_enemy_pretrained_actions()
         self.env.set_action(self.enemy_handle, enemy_actions)
 
         self.frames += 1
@@ -437,6 +446,65 @@ class magent_parallel_env(ParallelEnv):
         if self.render_mode == "human":
             self.render()
         return observations, rewards, terminations, truncations, infos
+
+    def load_pretrained_enemy(self):
+        print("Loading pretrained enemy...")
+        import torch
+        import os
+
+        model_path = os.path.dirname(os.path.realpath(__file__))
+        model_name = self.enemy_name + ".pt"
+        model_dir = os.path.join(
+            model_path, "pretrained_model", self._env_id, model_name
+        )
+        from .torch_model import QNetwork
+
+        self.enemy_model = QNetwork(
+            self.enemy_observation_space.shape,
+            self.enemy_action_space.n,
+        )
+        self.enemy_model.load_state_dict(torch.load(model_dir, weights_only=True))
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.enemy_model.to(self.device)
+        print("Done loading.")
+
+    def get_enemy_obses(self):
+        view, features = self.env.get_observation(self.enemy_handle)
+        if self.minimap_mode and not self.extra_features:
+            features = features[:, -2:]
+        if self.minimap_mode or self.extra_features:
+            feat_reshape = np.expand_dims(np.expand_dims(features, 1), 1)
+            feat_img = np.tile(feat_reshape, (1, view.shape[1], view.shape[2], 1))
+            fin_obs = np.concatenate([view, feat_img], axis=-1)
+        else:
+            fin_obs = np.copy(view)
+
+        return np.array(fin_obs)
+
+    def get_enemy_pretrained_actions(self):
+        import torch
+
+        if getattr(self, "enemy_model", None) is None:
+            self.load_pretrained_enemy()
+        enemy_obses = self.get_enemy_obses()
+        enemy_obses = (
+            torch.Tensor(enemy_obses).float().permute([0, 3, 1, 2]).to(self.device)
+        )
+
+        with torch.no_grad():
+            q_values = self.enemy_model(enemy_obses)
+        actions = torch.argmax(q_values, dim=1).cpu().numpy()
+
+        random_sample = np.random.rand(actions.shape[0])
+        random_action_mask = random_sample < 0.05
+
+        actions[random_action_mask] = np.random.randint(
+            0,
+            int(self.enemy_action_space.n),
+            size=np.sum(random_action_mask.astype(int)),
+        )
+
+        return actions.astype(np.int32)
 
     def generate_map(self):
         raise NotImplementedError("Should be implemented by subclasses.")

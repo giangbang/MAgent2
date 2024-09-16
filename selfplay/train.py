@@ -51,13 +51,13 @@ class Args:
     """the id of the environment"""
     map_size: int = 45
     """map size of magent, lower mapsize has lower number of agents"""
-    total_timesteps: int = 50000
+    total_timesteps: int = 100000
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments, always fixed with magent"""
-    buffer_size: int = 10000
+    buffer_size: int = 50000
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
@@ -196,6 +196,8 @@ if __name__ == "__main__":
             envs.action_spaces[envs.names[0]].n,
         ).to(device)
     }
+    
+    print(q_networks[envs.names[0]])
 
     if args.share_weight_all:
         q_networks = {name: q_networks[envs.names[0]] for name in envs.names}
@@ -242,8 +244,8 @@ if __name__ == "__main__":
     for group, target_network in target_networks.items():
         target_network.load_state_dict(q_networks[group].state_dict())
 
-    # if args.share_weight_all: # this not work
-    #     args.buffer_size = args.buffer_size * envs.n_agents
+    if args.share_weight_all:
+        args.buffer_size = args.buffer_size * envs.n_agents
 
     rbs = {
         envs.names[0]: ReplayBuffer(
@@ -419,6 +421,7 @@ if __name__ == "__main__":
         # as dead agents and truncated one are excluded from this list
         if len(envs.agents) == 0:
             obs, _ = envs.magent_reset()
+            print(f"An episode ends with length {current_eps_len}")
             print(f"A new episode restarts at step {global_step+1}...")
             if args.random_opponent:
                 print("Episode reward of blueteam:", current_rewards_of_blueteam)

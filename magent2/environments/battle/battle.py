@@ -277,6 +277,8 @@ class _parallel_env(magent_parallel_env, EzPickle):
             render_mode,
         )
 
+        self._env_id = "battle_v4"
+
     def generate_map(self):
         env, map_size, handles = self.env, self.map_size, self.handles
         """ generate a map, which consists of two squares of agents"""

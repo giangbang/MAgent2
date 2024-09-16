@@ -8,7 +8,14 @@ from magent2.specs import specs
 
 
 def gameplay_video(
-    vis_env, env_name, seed, q_networks, device, vid_dir, update_steps=None
+    vis_env,
+    env_name,
+    seed,
+    q_networks,
+    device,
+    vid_dir,
+    update_steps=None,
+    enemy_team=None,
 ):
     os.makedirs(vid_dir, exist_ok=True)
 
@@ -61,6 +68,14 @@ def gameplay_video(
     out.release()
 
     # play agains random agents
+    if enemy_team is None:
+        enemy_team = [
+            "prey",
+            "red",
+            "redmelee",
+            "redranged",
+            "deer",
+        ]
     vis_env.magent_reset()
     frames = [vis_env.render()]
 
@@ -74,13 +89,7 @@ def gameplay_video(
             agent_handle = agent.split("_")[0]
 
             # agents with the following handles act as random bot
-            random_agent = agent_handle in [
-                "prey",
-                "red",
-                "redmelee",
-                "redranged",
-                "deer",
-            ]
+            random_agent = agent_handle in enemy_team
 
             if (
                 random_agent or random.random() < 0.05
@@ -97,6 +106,9 @@ def gameplay_video(
 
             actions[agent] = action
         vis_env.magent_step(actions)
+        if not vis_env.random_enemy:
+            enemy_actions = vis_env.get_enemy_pretrained_actions()
+            vis_env.env.set_action(vis_env.enemy_handle, enemy_actions)
 
     height, width, _ = frames[0].shape
 

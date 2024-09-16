@@ -51,13 +51,13 @@ class Args:
     """the id of the environment"""
     map_size: int = 45
     """map size of magent, lower mapsize has lower number of agents"""
-    total_timesteps: int = 50000
+    total_timesteps: int = 100000
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
     num_envs: int = 1
     """the number of parallel game environments, always fixed with magent"""
-    buffer_size: int = 10000
+    buffer_size: int = 20000
     """the replay memory buffer size"""
     gamma: float = 0.99
     """the discount factor gamma"""
@@ -65,7 +65,7 @@ class Args:
     """the target network update rate"""
     target_network_frequency: int = 10
     """the timesteps it takes to update the target network"""
-    batch_size: int = 128
+    batch_size: int = 256
     """the batch size of sample from the reply memory"""
     start_e: float = 1
     """the starting epsilon for exploration"""
@@ -83,8 +83,8 @@ class Args:
     """Training with reward sum of all agent in blueteam, for debuging purpose"""
     video_frequency: int = 10_000
     """Frequency for logging video training"""
-    share_weight_all: bool = False
-    """share weights between all handles (both friend and enemy), this is truly a selfplay setting"""
+    play_against_pretrained: bool = False
+    """Play against pretrained model, trained against random policy"""
 
 
 def make_env(env_id, seed, render=False, **kwargs):
@@ -145,14 +145,6 @@ if __name__ == "__main__":
     args = tyro.cli(Args)
     assert args.num_envs == 1, "vectorized envs are not supported at the moment"
     print(args)
-    if args.share_weight_all:
-        print("Share weight between both teams, true selfplay settings!")
-        assert args.env_id not in [
-            "tiger_deer_v3",
-            "adversarial_pursuit_v4",
-            "combined_arms_v6",
-        ], "not support heterogeneous env"
-        # assert not args.random_opponent, "if use random opponent, do not share weight"
 
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
@@ -186,10 +178,16 @@ if __name__ == "__main__":
     import magent2.environments.magent_env
 
     envs: magent2.environments.magent_env.magent_parallel_env = make_env(
-        args.env_id, args.seed, map_size=args.map_size
+        args.env_id,
+        args.seed,
+        map_size=args.map_size,
     )()
     vis_env = make_env(args.env_id, args.seed, render=True)()
     env_name = "_".join(args.env_id.split("_")[:-1])
+
+    if args.play_against_pretrained:
+        envs.set_random_enemy(False)
+        vis_env.set_random_enemy(False)
 
     from magent2.specs import specs
 
@@ -197,6 +195,7 @@ if __name__ == "__main__":
         envs.agent_observation_space.shape,
         envs.agent_action_space.n,
     ).to(device)
+    print(q_networks)
     optimizers = optim.Adam(q_networks.parameters(), lr=args.learning_rate)
 
     target_networks = QNetwork(
@@ -346,13 +345,18 @@ if __name__ == "__main__":
                 device=device,
                 vid_dir=model_path,
                 update_steps=global_step,
+                enemy_team=[envs.enemy_name],
             )
 
         if np.all(done) or infos["truncated"]:
             obses, _ = envs.gym_reset()
             active_agents = np.ones(envs.n_agents, bool)
+            print(f"An episode ends with length {current_eps_len}")
             print(f"A new episode restarts at step {global_step+1}...")
-            print("Episode reward of blueteam:", current_rewards_of_blueteam)
+            print(
+                f"Episode reward of {envs.agent_name} team:",
+                current_rewards_of_blueteam,
+            )
 
             writer.add_scalar("charts/episodic_length", current_eps_len, global_step)
             current_eps_len = 0
@@ -377,6 +381,7 @@ if __name__ == "__main__":
         q_networks=q_networkds_dict,
         device=device,
         vid_dir=model_path,
+        enemy_team=[vis_env.enemy_name],
     )
 
     vis_env.close()
