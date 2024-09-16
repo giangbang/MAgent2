@@ -330,6 +330,8 @@ class magent_parallel_env(ParallelEnv):
             view, features = self.env.get_observation(handle)
 
             pos = self.env.get_pos(handle)
+            if len(pos) == 0:
+                continue
             pos_x, pos_y = zip(*pos)
             state[pos_x, pos_y, 1 + handle.value * 2] = 1
             state[pos_x, pos_y, 2 + handle.value * 2] = view[
