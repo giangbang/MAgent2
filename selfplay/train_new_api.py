@@ -153,6 +153,7 @@ if __name__ == "__main__":
             "combined_arms_v6",
         ], "not support heterogeneous env"
         # assert not args.random_opponent, "if use random opponent, do not share weight"
+
     run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
     if args.track:
         import wandb
@@ -190,96 +191,37 @@ if __name__ == "__main__":
     vis_env = make_env(args.env_id, args.seed, render=True)()
     env_name = "_".join(args.env_id.split("_")[:-1])
 
-    q_networks = {
-        envs.names[0]: QNetwork(
-            envs.observation_spaces[envs.names[0]].shape,
-            envs.action_spaces[envs.names[0]].n,
-        ).to(device)
-    }
+    from magent2.specs import specs
 
-    if args.share_weight_all:
-        q_networks = {name: q_networks[envs.names[0]] for name in envs.names}
-    else:
-        q_networks = {
-            name: QNetwork(
-                envs.observation_spaces[envs.names[0]].shape,
-                envs.action_spaces[envs.names[0]].n,
-            ).to(device)
-            for name in envs.names
-        }
+    q_networks = QNetwork(
+        envs.agent_observation_space.shape,
+        envs.agent_action_space.n,
+    ).to(device)
+    optimizers = optim.Adam(q_networks.parameters(), lr=args.learning_rate)
 
-    optimizers = {
-        envs.names[0]: optim.Adam(
-            q_networks[envs.names[0]].parameters(), lr=args.learning_rate
-        )
-    }
-    if args.share_weight_all:
-        optimizers = {name: optimizers[envs.names[0]] for name in envs.names}
-    else:
-        optimizers = {
-            name: optim.Adam(q_network.parameters(), lr=args.learning_rate)
-            for name, q_network in q_networks.items()
-        }
+    target_networks = QNetwork(
+        envs.agent_observation_space.shape,
+        envs.agent_action_space.n,
+    ).to(device)
 
-    target_networks = {
-        envs.names[0]: QNetwork(
-            envs.observation_spaces[envs.names[0]].shape,
-            envs.action_spaces[envs.names[0]].n,
-        ).to(device)
-    }
+    target_networks.load_state_dict(q_networks.state_dict())
 
-    if args.share_weight_all:
-        target_networks = {name: target_networks[envs.names[0]] for name in envs.names}
-    else:
-        target_networks = {
-            name: QNetwork(
-                envs.observation_spaces[envs.names[0]].shape,
-                envs.action_spaces[envs.names[0]].n,
-            ).to(device)
-            for name in envs.names
-        }
-
-    for group, target_network in target_networks.items():
-        target_network.load_state_dict(q_networks[group].state_dict())
-
-    # if args.share_weight_all: # this not work
-    #     args.buffer_size = args.buffer_size * envs.n_agents
-
-    rbs = {
-        envs.names[0]: ReplayBuffer(
-            args.buffer_size,
-            envs.observation_spaces[envs.names[0]].shape,
-            1,  # discrete action
-            device,
-            handle_timeout_termination=False,
-        )
-    }
-
-    if args.share_weight_all:
-        rbs = {name: rbs[envs.names[0]] for name in envs.names}
-    else:
-        rbs = {
-            name: ReplayBuffer(
-                args.buffer_size,
-                envs.observation_spaces[envs.names[0]].shape,
-                1,  # discrete action
-                device,
-                handle_timeout_termination=False,
-            )
-            for name in envs.names
-        }  # each group corresponds to a seperate replay buffer, they share experience within each group
+    rbs = ReplayBuffer(
+        args.buffer_size,
+        envs.agent_observation_space.shape,
+        1,  # discrete action
+        device,
+        handle_timeout_termination=False,
+    )
     current_eps_len = 0
-
-    opponent_groups = []
-    if args.random_opponent:  # red is enemy, act random
-        opponent_groups = ["prey", "red", "redmelee", "redranged", "deer"]
 
     env = envs.env
     start_time = time.time()
     current_rewards_of_blueteam = 0
 
     # TRY NOT TO MODIFY: start the game
-    envs.magent_reset(seed=args.seed)
+    obses, _ = envs.gym_reset(seed=args.seed)
+    active_agents = np.ones(envs.n_agents, bool)
     for global_step in range(args.total_timesteps):
         epsilon = linear_schedule(
             args.start_e,
@@ -287,141 +229,130 @@ if __name__ == "__main__":
             args.exploration_fraction * args.total_timesteps,
             global_step,
         )
-        _actions = {}
-        obs = envs._compute_observations()
-        current_eps_len += 1
-        for agent in envs.agents:
-            # ALGO LOGIC: put action logic here
-            group = agent.split("_")[0]
-            if random.random() < epsilon or (
-                args.random_opponent and group in opponent_groups
-            ):
-                # print(group in opponent_groups)
-                actions = np.random.randint(0, envs.action_spaces[group].n, size=(1,))
-            else:
-                obs_tensor = (
-                    torch.Tensor(obs[agent]).float().permute(2, 0, 1).to(device)
-                )
-                with torch.no_grad():
-                    q_values = q_networks[group](obs_tensor)
-                assert len(q_values.shape) == 2
-                actions = torch.argmax(q_values, dim=1).cpu().numpy()
-                assert np.prod(actions.shape) == 1
 
-            _actions[agent] = actions[0]
+        current_eps_len += 1
+
+        tensor_obses = torch.Tensor(obses).float().permute(0, 3, 1, 2).to(device)
+
+        actions = np.empty(envs.n_agents, dtype=np.int32)
+        # print("action.shape", actions.shape)
+
+        random_action_sample = np.random.rand(*actions.shape)
+
+        random_action_mask = random_action_sample < epsilon
+        # print("random actions mask", random_action_mask.shape)
+
+        random_action_mask = random_action_mask
+        greedy_action_mask = ~random_action_mask
+
+        actions[random_action_mask] = np.random.randint(
+            0,
+            envs.agent_action_space.n,
+            size=(np.sum(random_action_mask),),
+        )
+        if np.sum(greedy_action_mask) > 0:
+            with torch.no_grad():
+                q_values = q_networks(tensor_obses[greedy_action_mask])
+            assert len(q_values.shape) == 2
+            greedy_actions = torch.argmax(q_values, dim=1).cpu().numpy()
+            actions[greedy_action_mask] = greedy_actions
 
         # TRY NOT TO MODIFY: execute the game and log data.
-        next_obs, rewards, terminations, truncations, infos = envs.magent_step(_actions)
-
-        if args.sum_reward:
-            sum_rw = 0
-            for agent in obs.keys():
-                group = agent.split("_")[0]
-                if group not in opponent_groups:
-                    sum_rw += rewards[agent]
-            sum_rw = np.array((sum_rw,))
+        next_obs, rewards, done, infos = envs.gym_step(actions)
 
         # TRY NOT TO MODIFY: save data to reply buffer;
-        for agent in obs.keys():
-            group = agent.split("_")[0]
-            if args.random_opponent and group in opponent_groups:
-                continue
-            r = np.array((rewards[agent],))
-            if args.sum_reward:
-                r = sum_rw
-            termin = np.array((terminations[agent],))
-            a = np.array((_actions[agent],))
-            rbs[group].add(obs[agent], next_obs[agent], a, r, termin, [{}])
-
-        # LOGGING REWARD
-        if args.random_opponent:
-            for agent, r in rewards.items():
-                agent_group = agent.split("_")[0]
-                if agent_group not in opponent_groups:
-                    current_rewards_of_blueteam += r
+        for o, no, a, r, d, active in zip(
+            obses, next_obs, actions, rewards, done, active_agents
+        ):
+            if active:
+                rbs.add(
+                    o,
+                    no,
+                    a,
+                    r,
+                    d,
+                    [{}],
+                )
+            # print(np.sum(o), np.sum(no), (r), (a), (d))
 
         # TRY NOT TO MODIFY: CRUCIAL step easy to overlook
-        # obs = next_obs
+        obses = next_obs
+        current_rewards_of_blueteam += rewards.sum()
+        active_agents = done == False
 
         # ALGO LOGIC: training.
         if global_step > args.learning_starts:
             if global_step % args.train_frequency == 0:
-                for handle, rb in rbs.items():
-                    if args.random_opponent and handle in opponent_groups:
-                        continue
-                    data = rb.sample(args.batch_size)
-                    with torch.no_grad():
-                        target_max, _ = target_networks[handle](
-                            data.next_observations.permute(0, 3, 1, 2)
-                        ).max(dim=1)
-                        td_target = data.rewards.flatten() + args.gamma * target_max * (
-                            1 - data.dones.flatten()
-                        )
-                    old_val = (
-                        q_networks[handle](data.observations.permute(0, 3, 1, 2))
-                        .gather(1, data.actions)
-                        .squeeze()
+                data = rbs.sample(args.batch_size)
+                with torch.no_grad():
+                    target_max, _ = target_networks(
+                        data.next_observations.permute(0, 3, 1, 2)
+                    ).max(dim=1)
+                    # print(data.actions)
+                    td_target = data.rewards.flatten() + args.gamma * target_max * (
+                        1 - data.dones.flatten()
                     )
-                    loss = F.mse_loss(td_target, old_val)
+                    # print(td_target)
+                # print(q_networks(data.observations.permute(0, 3, 1, 2)).shape)
+                old_val = (
+                    q_networks(data.observations.permute(0, 3, 1, 2))
+                    .gather(1, data.actions)
+                    .squeeze()
+                )
+                # print(td_target.shape, old_val.shape)
+                # print(old_val)
+                loss = F.mse_loss(td_target, old_val)
 
-                    # optimize the model
-                    optimizer = optimizers[handle]
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
+                # optimize the model
+                optimizer = optimizers
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-                if global_step % 1000 == 0:
-                    writer.add_scalar("losses/td_loss", loss, global_step)
-                    writer.add_scalar(
-                        "losses/q_values", old_val.mean().item(), global_step
-                    )
-                    print(
-                        "SPS:",
-                        int(global_step / (time.time() - start_time)),
-                        f", {global_step}/{args.total_timesteps}",
-                    )
-                    writer.add_scalar(
-                        "charts/SPS",
-                        int(global_step / (time.time() - start_time)),
-                        global_step,
-                    )
+            if global_step % 1000 == 0:
+                writer.add_scalar("losses/td_loss", loss, global_step)
+                writer.add_scalar("losses/q_values", old_val.mean().item(), global_step)
+                print(
+                    "SPS:",
+                    int(global_step / (time.time() - start_time)),
+                    f", {global_step}/{args.total_timesteps}",
+                )
+                writer.add_scalar(
+                    "charts/SPS",
+                    int(global_step / (time.time() - start_time)),
+                    global_step,
+                )
 
             # update target network
             if global_step % args.target_network_frequency == 0:
-                for handle in target_networks.keys():
-                    target_network, q_network = (
-                        target_networks[handle],
-                        q_networks[handle],
+                for target_network_param, q_network_param in zip(
+                    target_networks.parameters(), q_networks.parameters()
+                ):
+                    target_network_param.data.copy_(
+                        args.tau * q_network_param.data
+                        + (1.0 - args.tau) * target_network_param.data
                     )
-                    for target_network_param, q_network_param in zip(
-                        target_network.parameters(), q_network.parameters()
-                    ):
-                        target_network_param.data.copy_(
-                            args.tau * q_network_param.data
-                            + (1.0 - args.tau) * target_network_param.data
-                        )
 
         # VIDEO LOGGING
         if (global_step + 1) % args.video_frequency == 0:
             print("Logging video...")
             model_path = f"runs/{run_name}/{args.exp_name}"
+            q_networkds_dict = {name: q_networks for name in vis_env.names}
             gameplay_video(
                 vis_env=vis_env,
                 env_name=env_name,
                 seed=args.seed,
-                q_networks=q_networks,
+                q_networks=q_networkds_dict,
                 device=device,
                 vid_dir=model_path,
                 update_steps=global_step,
             )
 
-        # this agents list already handle termination and truncation
-        # as dead agents and truncated one are excluded from this list
-        if len(envs.agents) == 0:
-            obs, _ = envs.magent_reset()
+        if np.all(done) or infos["truncated"]:
+            obses, _ = envs.gym_reset()
+            active_agents = np.ones(envs.n_agents, bool)
             print(f"A new episode restarts at step {global_step+1}...")
-            if args.random_opponent:
-                print("Episode reward of blueteam:", current_rewards_of_blueteam)
+            print("Episode reward of blueteam:", current_rewards_of_blueteam)
 
             writer.add_scalar("charts/episodic_length", current_eps_len, global_step)
             current_eps_len = 0
@@ -430,8 +361,7 @@ if __name__ == "__main__":
     model_path = f"runs/{run_name}/{args.exp_name}"
     if args.save_model:
         os.makedirs(model_path, exist_ok=True)
-        for handle, q_network in q_networks.items():
-            torch.save(q_network.state_dict(), os.path.join(model_path, handle + ".pt"))
+        torch.save(q_networks.state_dict(), os.path.join(model_path, "model.pt"))
         print(f"model saved to {model_path}")
 
     envs.close()
@@ -439,11 +369,12 @@ if __name__ == "__main__":
     writer.close()
 
     # visualize end results
+    q_networkds_dict = {name: q_networks for name in vis_env.names}
     gameplay_video(
         vis_env=vis_env,
         env_name=env_name,
         seed=args.seed,
-        q_networks=q_networks,
+        q_networks=q_networkds_dict,
         device=device,
         vid_dir=model_path,
     )

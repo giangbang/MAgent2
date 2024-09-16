@@ -1,3 +1,4 @@
+import copy
 import ctypes
 import numpy as np
 from typing import List
@@ -32,17 +33,27 @@ class magent_parallel_env(ParallelEnv):
         minimap_mode: bool,
         extra_features: bool,
         render_mode=None,
+        return_handle_id: int = 1,
     ):
+        assert len(names) == len(active_handles)
+
         self.map_size = map_size
         self.max_cycles = max_cycles
         self.minimap_mode = minimap_mode
         self.extra_features = extra_features
         self.env = env
 
+        self.agents_handle_id = max(return_handle_id, len(active_handles) - 1)
+        self.enemy_handle_id = len(active_handles) - 1 - self.agents_handle_id
+
+        assert isinstance(self.agents_handle_id, int), self.agents_handle_id
+        assert isinstance(self.enemy_handle_id, int), self.enemy_handle_id
+
         # save agent names, such as `blue`, `red`, `deer`, `tiger`, etc
         self.names = names
         self.handles = active_handles
         self._all_handles = self.env.get_handles()
+        assert len(self._all_handles) < 3, "not support"
         env.reset()
         self.generate_map()
         self.team_sizes = [
@@ -90,10 +101,22 @@ class magent_parallel_env(ParallelEnv):
         }
 
         self._name2handle = {n: h for n, h in zip(names, self._all_handles)}
-        self._handle2name = {h: n for h, n in zip(names, self._all_handles)}
+
+        self.max_team_size = copy.deepcopy(self.team_sizes)
+
+        # if name == "blue", then you control the blue team
+        self.agent_name = self.names[return_handle_id]
+        self.n_agents = self.max_team_size[self.agents_handle_id]
+        print("Name of the team you controll", self.agent_name)
+
+        self.enemy_name = self.names[self.enemy_handle_id]
+        self.n_enemy = self.max_team_size[self.enemy_handle_id]
+        print("Name of the enemy team", self.enemy_name)
+
+        assert len(self.team_sizes) == 2, "support two teams, not battle field"
 
         self._zero_obs = {
-            agent: np.zeros_like(self.observation_space_of_agent(agent).low)
+            agent: np.zeros_like(self.observation_spaces[agent.split("_")[0]].low)
             for agent in self.agents
         }
         self.base_state = np.zeros(self.state_space.shape, dtype="float32")
@@ -104,55 +127,21 @@ class magent_parallel_env(ParallelEnv):
         self._renderer = None
         self.frames = 0
 
-    def observation_space_of_agent_name(self, name: str):
-        """
-        Given agent type name, for example `deer`, return the observation space of that agent type
-        This is helpful e.g. when agents in the same group share weights
-        """
-        assert name in self.names
-        return self.observation_spaces[name]
+        self.agents_handle = self._all_handles[self.agents_handle_id]
+        self.enemy_handle = self._all_handles[self.enemy_handle_id]
 
-    def action_space_of_agent_name(self, name: str):
-        """
-        Given agent type name, for example `deer`, return the action space of that agent type
-        This is helpful e.g. when agents in the same group share weights
-        """
-        assert name in self.names
-        return self.action_spaces[name]
+        self.agent_action_space = self.action_spaces[self.agent_name]
+        self.enemy_action_space = self.action_spaces[self.enemy_name]
 
-    def observation_space_of_agent(self, agent: str):
-        """
-        Given an agent, for example `deer_10`, return the action space of that single agent
-        This is helpful e.g. when agents in the same group do not share weights
-        """
-        name = "_".join(agent.split("_")[:-1])
-        assert name in self.names, f"`{name}` is not recognized."
-        return self.observation_spaces[name]
+        self.agent_observation_space = self.observation_spaces[self.agent_name]
+        self.enemy_observation_space = self.observation_spaces[self.enemy_name]
 
-    def action_space_of_agent(self, agent: str):
-        """
-        Given an agent, for example `deer_10`, return the action space of that single agent
-        This is helpful e.g. when agents in the same group do not share weights
-        """
-        name = "_".join(agent.split("_")[:-1])
-        assert name in self.names, f"`{name}` is not recognized."
-        return self.action_spaces[name]
+        assert self.names[return_handle_id] in ["blue", "tiger"]
 
     def seed(self, seed=None):
         if seed is None:
             _, seed = seeding.np_random()
         self.env.set_seed(seed)
-
-    def get_obs_and_alive_status_of_agent_name(self, name: str):
-        assert name in self.names, f"`{name}` is not recognized."
-        handle = self._name2handle[name]
-        return self._compute_obs(handle), self.env.get_alive(handle)
-
-    def set_actions(self, handle: ctypes.c_int32, actions: np.ndarray):
-        self.env.set_action(handle, actions)
-
-    def engine_step(self):
-        step_done = self.env.step()
 
     def _calc_obs_shapes(self):
         view_spaces = [self.env.get_view_space(handle) for handle in self.handles]
@@ -202,7 +191,8 @@ class magent_parallel_env(ParallelEnv):
             self._renderer.close()
             self._renderer = None
 
-    def reset(self, seed=None, return_info=False, options=None):
+    def magent_reset(self, seed=None, return_info=False, options=None):
+        """reset function from magent2"""
         if seed is not None:
             self.seed(seed=seed)
         self.agents = self.possible_agents[:]
@@ -212,21 +202,17 @@ class magent_parallel_env(ParallelEnv):
         self.generate_map()
         return self._compute_observations(), {}
 
-    def _compute_obs(self, handle):
-        """
-        Return raw observations of each agent
-        """
-        view, features = self.env.get_observation(handle)
+    def gym_reset(self, seed=None):
+        """gym API reset"""
+        if seed is not None:
+            self.seed(seed=seed)
+        self.env.reset()
+        self.frames = 0
+        self.team_sizes = [self.env.get_num(handle) for handle in self.handles]
+        self.generate_map()
 
-        if self.minimap_mode and not self.extra_features:
-            features = features[:, -2:]
-        if self.minimap_mode or self.extra_features:
-            feat_reshape = np.expand_dims(np.expand_dims(features, 1), 1)
-            feat_img = np.tile(feat_reshape, (1, view.shape[1], view.shape[2], 1))
-            fin_obs = np.concatenate([view, feat_img], axis=-1)
-        else:
-            fin_obs = np.copy(view)
-        return fin_obs
+        obses = self.get_obses()
+        return obses, {}
 
     def _compute_observations(self):
         """
@@ -254,6 +240,49 @@ class magent_parallel_env(ParallelEnv):
             for agent, obs in zip(self.possible_agents, observes)
             if agent in ret_agents
         }
+
+    def get_obses(self):
+        return_obses = np.zeros(
+            (self.n_agents, *self.agent_observation_space.shape), dtype=np.float32
+        )
+        ids = self.env.get_agent_id(self.agents_handle)
+
+        if self.agents_handle_id > 0:
+            ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
+
+        view, features = self.env.get_observation(self.agents_handle)
+        if self.minimap_mode and not self.extra_features:
+            features = features[:, -2:]
+        if self.minimap_mode or self.extra_features:
+            feat_reshape = np.expand_dims(np.expand_dims(features, 1), 1)
+            feat_img = np.tile(feat_reshape, (1, view.shape[1], view.shape[2], 1))
+            fin_obs = np.concatenate([view, feat_img], axis=-1)
+        else:
+            fin_obs = np.copy(view)
+        return_obses[ids] = fin_obs
+        return return_obses
+
+    def get_rewards(self):
+        return_rewards = np.zeros(self.n_agents, dtype=np.float32)
+        ids = self.env.get_agent_id(self.agents_handle)
+
+        if self.agents_handle_id > 0:
+            ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
+
+        return_rewards[ids] = self.env.get_reward(self.agents_handle)
+        return return_rewards[..., None]
+
+    def get_dones(self, step_done: bool):
+        return_dones = np.ones(self.n_agents, dtype=bool)
+        if not step_done:
+            ids = self.env.get_agent_id(self.agents_handle)
+            if self.agents_handle_id > 0:
+                ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(
+                    np.int32
+                )
+
+            return_dones[ids] = ~self.env.get_alive(self.agents_handle)
+        return return_dones[..., None]
 
     def _compute_rewards(self):
         """
@@ -324,8 +353,54 @@ class magent_parallel_env(ParallelEnv):
                 state[pos_x, pos_y, 1 + len(self.team_sizes) * 2 :] = state_features
         return state
 
-    def step(self, all_actions):
+    def get_enemy_random_actions(self):
+        n_enemy_alive = np.sum(self.env.get_alive(self.enemy_handle))
+
+        action_dim_enemy = int(self.enemy_action_space.n)
+        # assert isinstance(
+        #     action_dim_enemy, int
+        # ), f"{self.enemy_action_space.n} {type(self.enemy_action_space.n)}"
+
+        return_action = np.random.randint(
+            0, action_dim_enemy, size=(n_enemy_alive,), dtype=np.int32
+        )
+        return return_action
+
+    def gym_step(self, actions: np.ndarray):
+        """Gym API step"""
+        assert len(actions) == self.n_agents
+
+        # set the action of the controlled agents
+        ids = self.env.get_agent_id(self.agents_handle)
+        # print(ids)
+        if self.agents_handle_id > 0:
+            ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
+
+        self.env.set_action(self.agents_handle, actions[ids])
+
+        # set action of the enemy team (not controlled by training agents)
+        enemy_actions = self.get_enemy_random_actions()
+        self.env.set_action(self.enemy_handle, enemy_actions)
+
+        self.frames += 1
+        step_done = self.env.step()
+
+        next_obses = self.get_obses()
+        rewards = self.get_rewards()
+        dones = self.get_dones(step_done)
+
+        # IMPORTANT: check this; call clear_dead before or after get return data
+        self.env.clear_dead()
+
+        info = {"truncated": self.frames >= self.max_cycles}
+        info["bad_transition"] = info["truncated"]  # harl
+        if info["truncated"]:
+            info["TimeLimit.truncated"] = True  # stable-baselines3
+        return next_obses, rewards, dones, info
+
+    def magent_step(self, all_actions: dict):
         """
+        Step function from magent2
         Perform one step update to the environment,
         returns result in dict form of each agent
         """

@@ -126,7 +126,7 @@ KILL_REWARD = 5
 minimap_mode_default = False
 default_reward_args = dict(
     step_reward=-0.005,
-    dead_penalty=-0.1,
+    dead_penalty=-2.5,
     attack_penalty=-0.1,
     attack_opponent_reward=0.2,
 )
@@ -168,8 +168,8 @@ def raw_env(
     #     )
     # )
     return parallel_env(
-            map_size, max_cycles, minimap_mode, extra_features, seed=seed, **reward_args
-        )
+        map_size, max_cycles, minimap_mode, extra_features, seed=seed, **reward_args
+    )
 
 
 env = make_env(raw_env)
