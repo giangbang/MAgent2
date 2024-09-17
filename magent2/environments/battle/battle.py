@@ -121,7 +121,7 @@ from magent2.environments.magent_env import magent_parallel_env, make_env
 
 
 default_map_size = 45
-max_cycles_default = 1000
+max_cycles_default = 300
 KILL_REWARD = 5
 minimap_mode_default = False
 default_reward_args = dict(
