@@ -310,7 +310,7 @@ class magent_parallel_env(ParallelEnv):
         Return dict form of termination states of each agent
         """
         dones = np.ones(self.max_num_agents, dtype=bool)
-        if not step_done:
+        if not step_done and not (self.frames >= self.max_cycles):
             for i, handle in enumerate(self.handles):
                 ids = self.env.get_agent_id(handle)
                 dones[ids] = ~self.env.get_alive(handle)
