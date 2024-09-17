@@ -465,9 +465,12 @@ class magent_parallel_env(ParallelEnv):
             self.enemy_observation_space.shape,
             self.enemy_action_space.n,
         )
-        self.enemy_model.load_state_dict(torch.load(model_dir, weights_only=True))
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.enemy_model.to(self.device)
+
+        self.device = "cpu"
+        self.enemy_model.load_state_dict(
+            torch.load(model_dir, weights_only=True, map_location=self.device)
+        )
+        # self.enemy_model.to(self.device)
         print("Done loading.")
 
     def get_enemy_obses(self):
