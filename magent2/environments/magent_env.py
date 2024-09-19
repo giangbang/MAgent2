@@ -140,6 +140,7 @@ class magent_parallel_env(ParallelEnv):
         self.set_random_enemy()  # enemy agents act randomly
 
         self._env_id = "None"  # declare by subclasses
+        self.enemy_dont_move = False
 
     def seed(self, seed=None):
         if seed is None:
@@ -387,11 +388,12 @@ class magent_parallel_env(ParallelEnv):
         self.env.set_action(self.agents_handle, actions[ids])
 
         # set action of the enemy team (not controlled by training agents)
-        if self.random_enemy:
-            enemy_actions = self.get_enemy_random_actions()
-        else:
-            enemy_actions = self.get_enemy_pretrained_actions()
-        self.env.set_action(self.enemy_handle, enemy_actions)
+        if not self.enemy_dont_move:
+            if self.random_enemy:
+                enemy_actions = self.get_enemy_random_actions()
+            else:
+                enemy_actions = self.get_enemy_pretrained_actions()
+            self.env.set_action(self.enemy_handle, enemy_actions)
 
         self.frames += 1
         step_done = self.env.step()

@@ -85,6 +85,8 @@ class Args:
     """Frequency for logging video training"""
     play_against_pretrained: bool = False
     """Play against pretrained model, trained against random policy"""
+    enemy_dont_move: bool = False
+    """Enemy just stand still"""
 
 
 def make_env(env_id, seed, render=False, **kwargs):
@@ -188,6 +190,10 @@ if __name__ == "__main__":
     if args.play_against_pretrained:
         envs.set_random_enemy(False)
         vis_env.set_random_enemy(False)
+
+    if args.enemy_dont_move:
+        envs.enemy_dont_move = True
+        vis_env.enemy_dont_move = True
 
     from magent2.specs import specs
 

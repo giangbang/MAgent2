@@ -94,8 +94,7 @@ def gameplay_video(
             if (
                 random_agent or random.random() < 0.05
             ):  # 5% random actions, similar to atari
-                name = agent.split("_")[0]
-                action = vis_env.action_spaces[name].sample()
+                action = vis_env.action_spaces[agent_handle].sample()
             else:
                 with torch.no_grad():
                     q_value = q_networks[agent_handle](
