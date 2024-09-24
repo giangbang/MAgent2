@@ -281,7 +281,7 @@ class magent_parallel_env(ParallelEnv):
 
     def get_dones(self, step_done: bool):
         return_dones = np.ones(self.n_agents, dtype=bool)
-        if not step_done:
+        if not step_done and not (self.frames >= self.max_cycles):
             ids = self.env.get_agent_id(self.agents_handle)
             if self.agents_handle_id > 0:
                 ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(
