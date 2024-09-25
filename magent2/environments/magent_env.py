@@ -140,7 +140,7 @@ class magent_parallel_env(ParallelEnv):
         self.set_random_enemy()  # enemy agents act randomly
 
         self._env_id = "None"  # declare by subclasses
-        self.enemy_dont_move = False
+        self.enemy_dont_move = False  # if this is True, enemy agents do nothing
 
     def seed(self, seed=None):
         if seed is None:
@@ -381,7 +381,7 @@ class magent_parallel_env(ParallelEnv):
 
         # set the action of the controlled agents
         ids = self.env.get_agent_id(self.agents_handle)
-        # print(ids)
+
         if self.agents_handle_id > 0:
             ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
 
@@ -390,10 +390,16 @@ class magent_parallel_env(ParallelEnv):
         # set action of the enemy team (not controlled by training agents)
         if not self.enemy_dont_move:
             if self.random_enemy:
+                # enemy take random actions
                 enemy_actions = self.get_enemy_random_actions()
             else:
+                # enemy take pretrained actions
                 enemy_actions = self.get_enemy_pretrained_actions()
             self.env.set_action(self.enemy_handle, enemy_actions)
+        else:
+            # enemy do nothing
+            n_enemy = np.sum(self.env.get_alive(self.enemy_handle))
+            self.env.set_action(self.enemy_handle, np.zeros(n_enemy))
 
         self.frames += 1
         step_done = self.env.step()
@@ -422,7 +428,7 @@ class magent_parallel_env(ParallelEnv):
             if agent in all_actions:
                 action_list[i] = all_actions[agent]
 
-        all_actions = np.asarray(action_list, dtype=np.int32)
+        all_actions = np.asarray(action_list, dtype=np.int32)  # type: ignore
         start_point = 0
         for i in range(len(self.handles)):
             size = self.team_sizes[i]
@@ -488,11 +494,44 @@ class magent_parallel_env(ParallelEnv):
 
         return np.array(fin_obs)
 
+    def get_adjacency_matrix(self, adjacent_dist=None) -> np.ndarray:
+        """
+        Return the adjacency matrix of all the agent in the group.
+
+        Returned matrix size is [n_agent x n_agent]
+        """
+        adjacent_dist = 3 if adjacent_dist is None else adjacent_dist
+
+        pos = np.zeros((self.n_agents, 2), dtype=np.int32)
+        ids = self.env.get_agent_id(self.agents_handle)
+
+        if self.agents_handle_id > 0:
+            ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
+
+        pos[ids] = self.env.get_pos(self.agents_handle)
+
+        # infinite norm
+        distance_matrix = np.abs(np.expand_dims(pos, 0) - np.expand_dims(pos, 1)).max(
+            axis=-1
+        )
+        adj_matrix = distance_matrix <= adjacent_dist
+
+        # filter out not-found (i.e. dead) agents
+        not_found = set(np.arange(self.n_agents)).difference(set(ids))
+        not_found = list(not_found)
+
+        if len(not_found) > 0:
+            adj_matrix[not_found, :] = 0
+            adj_matrix[:, not_found] = 0
+
+        return adj_matrix
+
     def get_enemy_pretrained_actions(self):
         import torch
 
         if getattr(self, "enemy_model", None) is None:
             self.load_pretrained_enemy()
+
         enemy_obses = self.get_enemy_obses()
         enemy_obses = (
             torch.Tensor(enemy_obses).float().permute([0, 3, 1, 2]).to(self.device)
