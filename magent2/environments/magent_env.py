@@ -381,7 +381,7 @@ class magent_parallel_env(ParallelEnv):
 
         # set the action of the controlled agents
         ids = self.env.get_agent_id(self.agents_handle)
-        # print(ids)
+
         if self.agents_handle_id > 0:
             ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
 
@@ -494,23 +494,37 @@ class magent_parallel_env(ParallelEnv):
 
         return np.array(fin_obs)
 
-    def get_adjacency_matrix(self, handle=None, adjacent_dist=None) -> np.ndarray:
+    def get_adjacency_matrix(self, adjacent_dist=None) -> np.ndarray:
         """
-        Return the adjacency matrix of all the agent in the `handle` group.
-        By default, handle is the agent handle.
+        Return the adjacency matrix of all the agent in the group.
 
         Returned matrix size is [n_agent x n_agent]
         """
-        handle = self.agents_handle if handle is None else handle
         adjacent_dist = 3 if adjacent_dist is None else adjacent_dist
 
-        pos = self.env.get_pos(handle)
-        assert len(pos) == self.max_team_size[1]
+        pos = np.zeros((self.n_agents, 2), dtype=np.int32)
+        ids = self.env.get_agent_id(self.agents_handle)
+
+        if self.agents_handle_id > 0:
+            ids -= np.sum(self.max_team_size[: self.agents_handle_id]).astype(np.int32)
+
+        pos[ids] = self.env.get_pos(self.agents_handle)
+
         # infinite norm
         distance_matrix = np.abs(np.expand_dims(pos, 0) - np.expand_dims(pos, 1)).max(
             axis=-1
         )
-        return distance_matrix <= adjacent_dist
+        adj_matrix = distance_matrix <= adjacent_dist
+
+        # filter out not-found (i.e. dead) agents
+        not_found = set(np.arange(self.n_agents)).difference(set(ids))
+        not_found = list(not_found)
+
+        if len(not_found) > 0:
+            adj_matrix[not_found, :] = 0
+            adj_matrix[:, not_found] = 0
+
+        return adj_matrix
 
     def get_enemy_pretrained_actions(self):
         import torch
