@@ -20,3 +20,5 @@ _build/*
 docs/environments/*.md
 !docs/environments/index.md
 Parallel_Demo.py
+
+venv
