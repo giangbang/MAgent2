@@ -138,7 +138,7 @@ class magent_parallel_env(ParallelEnv):
 
         return (self.map_size, self.map_size, state_depth)
 
-    def render(self):
+    def render(self, **kwargs):
         if self.render_mode is None:
             # gymnasium.logger.WARN(
             #     "You are calling render method without specifying any render mode."
@@ -150,7 +150,7 @@ class magent_parallel_env(ParallelEnv):
         assert (
             self.render_mode == self._renderer.mode
         ), "mode must be consistent across render calls"
-        return self._renderer.render(self.render_mode)
+        return self._renderer.render(self.render_mode, **kwargs)
 
     def close(self):
         if self._renderer is not None:

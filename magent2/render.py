@@ -156,7 +156,7 @@ class Renderer:
         pygame.display.quit()
         pygame.quit()
 
-    def render(self, mode):
+    def render(self, mode, draw_graph_fn = None):
         import os
 
         os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "hide"
@@ -256,6 +256,9 @@ class Renderer:
                     now_group[0] * grid_size,
                     now_group[1] * grid_size,
                 )
+
+            if draw_graph_fn is not None:
+                draw_graph_fn(self)
 
             for key, event_x, event_y in self.new_data[1]:
                 if key not in self.new_data[0]:
